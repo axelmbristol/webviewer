@@ -17,6 +17,10 @@ colNames = db.list_collection_names()
 
 date = []
 activity = []
+
+s_date = []
+s_activity = []
+
 cpt = 0
 colNames.sort()
 for name in colNames:
@@ -25,27 +29,35 @@ for name in colNames:
 
     animals = collection.find_one()["animals"]
 
-    for n in animals:
-        if n["serial_number"] == 40061201116:
-            animal = n
+    data = {
+    }
+
+    for animal in animals:
+        if animal["serial_number"] == 40061201116:
             tag_data = animal["tag_data"]
             serial = tag_data[0]["serial_number"]
             for entry in tag_data:
                 a = entry["first_sensor_value"]
                 if a > 1000:
-                    a = 1000
+                    continue
                 if a < 0:
-                    a = 0
+                    continue
 
                 activity.append(a)
-                formated = datetime.datetime.strptime(entry["date"] + " " + entry["time"], '%d/%m/%y %I:%M:%S %p').strftime(
+                formated = datetime.datetime.strptime(entry["date"] + " " + entry["time"],
+                                                      '%d/%m/%y %I:%M:%S %p').strftime(
                     '%Y-%m-%dT%H:%M')
                 date.append(formated)
+                #print(formated)
+                data.update({formated: a})
 
-                #print(str(a) + " " + str(formated))
+    for key in sorted(data):
+        s_activity.append(data[key])
+        s_date.append(key)
+        #print("%s: %s" % (key, data[key]))
 
     cpt = cpt + 1
-    if cpt > 7:
+    if cpt >= 7:
         break
 
 print('init dash...')
@@ -63,13 +75,13 @@ app.layout = html.Div(children=[
         figure=go.Figure(
             data=[
                 go.Scatter(
-                    x=date,
-                    y=activity,
+                    x=s_date,
+                    y=s_activity,
                     name=serial,
                 )
             ],
             layout=go.Layout(
-                margin=go.layout.Margin(l=40, r=0, t=40, b=160)
+                margin=go.layout.Margin(l=40, r=50, t=40, b=160)
             )
         ),
         style={'height': '80vh'},
