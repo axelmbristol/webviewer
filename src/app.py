@@ -2,29 +2,39 @@
 import dash
 import dash_core_components as dcc
 import dash_html_components as html
+import numpy as np
+import plotly.graph_objs as go
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
+N = 500
+_y = np.array([0,1,2,3])
+_x = np.array([np.datetime64('2005-02-25T03:30'),
+               np.datetime64('2005-02-25T03:31'),
+               np.datetime64('2005-02-25T03:32'),
+               np.datetime64('2005-02-25T03:33')])
+
 app.layout = html.Div(children=[
-    html.H1(children='Hello Dash'),
+    html.H1(children='farmId'),
 
     html.Div(children='''
-        Dash: A web application framework for Python.
+        description.
     '''),
 
     dcc.Graph(
-        id='example-graph',
-        figure={
-            'data': [
-                {'x': [1, 2, 3], 'y': [4, 1, 2], 'type': 'bar', 'name': 'SF'},
-                {'x': [1, 2, 3], 'y': [2, 4, 5], 'type': 'bar', 'name': u'Montréal'},
-            ],
-            'layout': {
-                'title': 'Dash Data Visualization'
-            }
-        }
+        figure=go.Figure(
+            data=[
+                go.Scatter(
+                    x=_x,
+                    y=_y,
+                    name='animal1',
+                )
+            ]
+        ),
+        style={'height': 300},
+        id='my-graph'
     )
 ])
 
