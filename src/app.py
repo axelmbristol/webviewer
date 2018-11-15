@@ -7,11 +7,30 @@ import plotly.graph_objs as go
 import pymongo
 from pymongo import MongoClient
 import datetime
+import tables
+
+
+con = True
+h5file = None
+if con:
+    h5file = tables.open_file("C:\\Users\\fo18103\PycharmProjects\mongo2pytables\src\data_compressed_blosc.h5", "r")
+else:
+    h5file = tables.open_file("C:\\Users\\fo18103\PycharmProjects\mongo2pytables\src\data.h5", "r")
+
+print(0)
+data = h5file.root.array
+
+print(data)
+
+h5file.close()
+
+
+exit(0)
 
 print('init mongoDB...')
 client = MongoClient()
 client = MongoClient('localhost', 27017)
-db = client['70101100029']
+db = client['70101100005']
 
 colNames = db.list_collection_names()
 
@@ -26,14 +45,10 @@ colNames.sort()
 for name in colNames:
     print(str(cpt)+"/"+str(len(colNames))+" "+name + "...")
     collection = db[name]
-
     animals = collection.find_one()["animals"]
-
-    data = {
-    }
-
+    data = {}
     for animal in animals:
-        if animal["serial_number"] == 40061201116:
+        if animal["serial_number"] == 40061200919:
             tag_data = animal["tag_data"]
             serial = tag_data[0]["serial_number"]
             for entry in tag_data:
@@ -57,7 +72,7 @@ for name in colNames:
         #print("%s: %s" % (key, data[key]))
 
     cpt = cpt + 1
-    if cpt >= 7:
+    if cpt >= 2:
         break
 
 print('init dash...')
@@ -77,6 +92,7 @@ app.layout = html.Div(children=[
                 go.Scatter(
                     x=s_date,
                     y=s_activity,
+                    mode='lines',
                     name=serial,
                 )
             ],
