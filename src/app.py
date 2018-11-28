@@ -42,7 +42,12 @@ if __name__ == '__main__':
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
     app.layout = html.Div(children=[
-        html.H1(id='farm-title', children=filepath),
+        html.Img(style={'width': '15vh'}, src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol-logo.png?itok=V80d7RFe'),
+        html.Br(),
+        html.Big(children="PhD Thesis: Deep learning of activity monitoring data for disease detection to support livestock farming in resource-poor communities in Africa."),
+        html.Br(),
+        html.Br(),
+        html.B(id='farm-title', children=filepath),
         html.Label('Farm selection:'),
         dcc.Dropdown(
             id='farm-dropdown',
@@ -98,7 +103,7 @@ if __name__ == '__main__':
         dash.dependencies.Output('farm-title', 'children'),
         [dash.dependencies.Input('farm-dropdown', 'value')])
     def update_title(file_path):
-        return "Farm: %s" % file_path
+        return "%s" % file_path
 
     @app.callback(
         dash.dependencies.Output('serial-number-dropdown', 'value'),
@@ -155,20 +160,45 @@ if __name__ == '__main__':
                     data = data_f
 
                 activity = [(x['first_sensor_value']) for x in data.iterrows() if x['serial_number'] == i]
+                try:
+                    signal_strength_min = [(x['signal_strength_min']) for x in data.iterrows() if x['serial_number'] == i]
+                except KeyError as e:
+                    print(e)
+                    signal_strength_min = None
+
+                try:
+                    signal_strength_max = [(x['signal_strength_max']) for x in data.iterrows() if
+                                           x['serial_number'] == i]
+                except KeyError as e:
+                    print(e)
+                    signal_strength_max = None
+
                 time = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M')) for x in data.iterrows()
                         if
                         x['serial_number'] == i]
                 traces.append(go.Bar(
                     x=time,
                     y=activity,
-                    name=str(i),
+                    name="activity level of %s" % str(i),
                     opacity=0.6
                 ))
+                if signal_strength_min is not None:
+                    traces.append(go.Scatter(
+                        x=time,
+                        y=signal_strength_min,
+                        name="signal_strength_min"
+                    ))
+                if signal_strength_max is not None:
+                    traces.append(go.Scatter(
+                        x=time,
+                        y=signal_strength_max,
+                        name="signal_strength_max"
+                    ))
             print(activity)
             print(time)
         return {
             'data': traces,
-            'layout': go.Layout(margin=go.layout.Margin(l=40, r=50, t=5, b=30))
+            'layout': go.Layout(legend=dict(y=0.98), margin=go.layout.Margin(l=40, r=50, t=5, b=30))
         }
 
     app.run_server(debug=True, use_reloader=False)
