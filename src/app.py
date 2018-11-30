@@ -1,36 +1,28 @@
 # -*- coding: utf-8 -*-
-import json
+import io
 import sys
-from datetime import datetime
-from os import listdir
-from os.path import isfile, join
-
+import json
 import dash
+import glob
+import ijson
+import pandas
+import pprint
+import numpy as np
+import tables
+from datetime import datetime
 import dash_core_components as dcc
 import dash_html_components as html
 import plotly.graph_objs as go
-import tables
-import glob
+from scipy import signal
+import matplotlib.pyplot as plt
+import plotly.tools as tls
+import plotly.plotly as py
 
 if __name__ == '__main__':
     print(dcc.__version__)
     print(sys.argv)
     con = False
-    # h5file = None
     files_in_data_directory = glob.glob("%s\*.h5" % sys.argv[1])
-    # filepath = "C:\SouthAfrica\\70091100056.h5"
-    # if con:
-    #     h5file = tables.open_file("C:\\Users\\fo18103\PycharmProjects\mongo2pytables\src\data_compressed_blosc.h5", "r")
-    # else:
-    #     h5file = tables.open_file(filepath, "r")
-    #
-    # data_f = h5file.root.resolution_f.data
-    # data_d = h5file.root.resolution_d.data
-    # data_h = h5file.root.resolution_h.data
-    # data_h_h = h5file.root.resolution_h_h.data
-    # data_m = h5file.root.resolution_m.data
-    # data_w = h5file.root.resolution_w.data
-
     farm_array = []
     for s in files_in_data_directory:
         split = s.split("\\")
@@ -46,10 +38,12 @@ if __name__ == '__main__':
         # Hidden div inside the app that stores the intermediate value
         html.Div(id='intermediate-value', style={'display': 'none'}),
         html.Img(id='logo', style={'width': '15vh'},
-                 src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol-logo.png?itok=V80d7RFe'),
+                 src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol'
+                     '-logo.png?itok=V80d7RFe'),
         html.Br(),
         html.Big(
-            children="PhD Thesis: Deep learning of activity monitoring data for disease detection to support livestock farming in resource-poor communities in Africa."),
+            children="PhD Thesis: Deep learning of activity monitoring data for disease detection to support "
+                     "livestock farming in resource-poor communities in Africa."),
         html.Br(),
         html.Br(),
         html.B(id='farm-title'),
@@ -84,7 +78,7 @@ if __name__ == '__main__':
                     4: '30Min',
                     5: 'Full'
                 },
-                value=3)], style={'width': '20vh', 'margin-bottom': '2vh', 'margin-left': '1vh'}
+                value=3)], style={'width': '25vh', 'margin-bottom': '2vh', 'margin-left': '1vh'}
         ),
         dcc.Graph(
             figure=go.Figure(
@@ -99,8 +93,24 @@ if __name__ == '__main__':
                     margin=go.layout.Margin(l=40, r=50, t=5, b=30)
                 )
             ),
-            style={'height': '35vh'},
+            style={'height': '20vh'},
             id='activity-graph'
+        ),
+        dcc.Graph(
+            figure=go.Figure(
+                data=[
+                    go.Heatmap(
+                        x=[],
+                        y=[],
+                        name='',
+                    )
+                ],
+                layout=go.Layout(
+                    margin=go.layout.Margin(l=40, r=50, t=5, b=30)
+                )
+            ),
+            style={'height': '20vh'},
+            id='spectrogram-activity-graph'
         ),
         dcc.Graph(
             figure=go.Figure(
@@ -115,7 +125,7 @@ if __name__ == '__main__':
                     margin=go.layout.Margin(l=40, r=50, t=0, b=0)
                 )
             ),
-            style={'height': '35vh'},
+            style={'height': '20vh'},
             id='signal-strength-graph'
         )
     ])
@@ -154,22 +164,30 @@ if __name__ == '__main__':
                          x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
                         for x in h5.root.resolution_h_h.data]
 
-            data = {'serial_numbers': serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
-                    'data_h': data_h, 'data_h_h': data_h_h}
+            data_f = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+                       x['serial_number'])
+                      for x in h5.root.resolution_f.data]
 
+            # data_h_h = []
+            # data_f = []
+
+            data = {'serial_numbers': serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
+                    'data_h': data_h, 'data_h_h': data_h_h, 'data_f': data_f}
             return json.dumps(data)
 
     @app.callback(
         dash.dependencies.Output('serial-number-dropdown', 'options'),
         [dash.dependencies.Input('intermediate-value', 'children')])
-    def update_serial_number_dropdown(intermediate_value):
+    def update_serial_number_drop_down(intermediate_value):
         if intermediate_value:
             data = json.loads(intermediate_value)["serial_numbers"]
+            # objects = ijson.items(io.StringIO(intermediate_value), 'serial_numbers')
+            # columns = list(objects)
             print("loaded serial numbers")
             print(data)
             s_array = []
-            for s in data:
-                s_array.append({'label': str(s), 'value': s})
+            for serial in data:
+                s_array.append({'label': str(serial), 'value': serial})
             return s_array
         else:
             return [{}]
@@ -182,69 +200,66 @@ if __name__ == '__main__':
         if file_path is not None:
             return "Data file: %s" % sys.argv[1] + "\\" + file_path
 
+
     @app.callback(
         dash.dependencies.Output('signal-strength-graph', 'figure'),
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
          dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('farm-dropdown', 'value')])
-    def update_figure(selected_serial_number, value, farm):
-        if farm is not None:
-            path = sys.argv[1] + "\\" + farm
-            print('2 You have selected "{}"'.format(path))
-        input = []
+         dash.dependencies.Input('intermediate-value', 'children')])
+    def update_figure(selected_serial_number, value, intermediate_value):
+        input_ss = []
         if isinstance(selected_serial_number, list):
-            input.extend(selected_serial_number)
+            input_ss.extend(selected_serial_number)
         else:
-            input.append(selected_serial_number)
+            input_ss.append(selected_serial_number)
         traces = []
         if not selected_serial_number:
             print("2 selected_serial_number empty")
         else:
-            print("2 the selected serial number are: %s" % ', '.join(str(e) for e in input))
+            print("2 the selected serial number are: %s" % ', '.join(str(e) for e in input_ss))
             print("2 file opened value=%d" % value)
-            for i in input:
+            for i in input_ss:
                 data = None
+                raw = json.loads(intermediate_value)
+                print("loaded serial numbers")
                 if value == 0:
-                    data = tables.open_file(path, "r").root.resolution_m.data
+                    data = raw["data_m"]
                 if value == 1:
-                    data = tables.open_file(path, "r").root.resolution_w.data
+                    data = raw["data_w"]
                 if value == 2:
-                    data = tables.open_file(path, "r").root.resolution_d.data
+                    data = raw["data_d"]
                 if value == 3:
-                    data = tables.open_file(path, "r").root.resolution_h.data
+                    data = raw["data_h"]
                 if value == 4:
-                    data = tables.open_file(path, "r").root.resolution_h_h.data
+                    data = raw["data_h_h"]
                 if value == 5:
-                    data = tables.open_file(path, "r").root.resolution_f.data
-                try:
-                    print(data)
-                    signal_strength_min = [(x['signal_strength_min']) for x in data if x['serial_number'] == i]
-                    signal_strength_max = [(x['signal_strength_max']) for x in data if x['serial_number'] == i]
-                    time = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M')) for x in data if
-                            x['serial_number'] == i]
-                except KeyError as e:
-                    print(e)
-                    signal_strength_min = []
-                    signal_strength_max = []
-                    time = []
+                    data = raw["data_f"]
 
-                if signal_strength_min is not None:
-                    traces.append(go.Scatter(
-                        x=time,
-                        y=signal_strength_min,
-                        name="signal_strength_min"
-                    ))
-                if signal_strength_max is not None:
-                    traces.append(go.Scatter(
-                        x=time,
-                        y=signal_strength_max,
-                        name="signal_strength_max"
-                    ))
-            print(len(traces))
+                if value is not 5:
+                    signal_strength_min = [(x[4]) for x in data if x[2] == i]
+                    signal_strength_max = [(x[3]) for x in data if x[2] == i]
+                    time = [(x[0]) for x in data if x[2] == i]
+                    print(signal_strength_min)
+                    print(signal_strength_max)
+                    print(time)
+
+                    if signal_strength_min is not None:
+                        traces.append(go.Scatter(
+                            x=time,
+                            y=signal_strength_min,
+                            name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
+
+                        ))
+                    if signal_strength_max is not None:
+                        traces.append(go.Scatter(
+                            x=time,
+                            y=signal_strength_max,
+                            name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
+                        ))
         return {
             'data': traces,
-            'layout': go.Layout(xaxis={'title': 'time'}, yaxis={'title': 'RSSI(received signal strength in)'},
-                                legend=dict(y=0.98), margin=go.layout.Margin(l=40, r=50, t=5, b=30))
+            'layout': go.Layout(xaxis={'title': 'Time'}, yaxis={'title': 'RSSI(received signal strength in)'},
+                                legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
         }
 
 
@@ -252,56 +267,113 @@ if __name__ == '__main__':
         dash.dependencies.Output('activity-graph', 'figure'),
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
          dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('farm-dropdown', 'value')])
-    def update_figure(selected_serial_number, value, farm):
-        if farm is not None:
-            path = sys.argv[1] + "\\" + farm
-            print('You have selected "{}"'.format(path))
-        input = []
+         dash.dependencies.Input('intermediate-value', 'children')])
+    def update_figure(selected_serial_number, value, intermediate_value):
+        input_ag = []
         if isinstance(selected_serial_number, list):
-            input.extend(selected_serial_number)
+            input_ag.extend(selected_serial_number)
         else:
-            input.append(selected_serial_number)
+            input_ag.append(selected_serial_number)
         traces = []
         if not selected_serial_number:
             print("selected_serial_number empty")
         else:
-            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input))
+            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
             print("1 value is %d" % value)
-            print("1 file opened path=%s" % path)
-            for i in input:
+            for i in input_ag:
                 data = None
+                raw = json.loads(intermediate_value)
+                print("loaded serial numbers")
                 if value == 0:
-                    data = tables.open_file(path, "r").root.resolution_m.data
+                    data = raw["data_m"]
                 if value == 1:
-                    data = tables.open_file(path, "r").root.resolution_w.data
+                    data = raw["data_w"]
                 if value == 2:
-                    data = tables.open_file(path, "r").root.resolution_d.data
+                    data = raw["data_d"]
                 if value == 3:
-                    data = tables.open_file(path, "r").root.resolution_h.data
+                    data = raw["data_h"]
                 if value == 4:
-                    data = tables.open_file(path, "r").root.resolution_h_h.data
+                    data = raw["data_h_h"]
                 if value == 5:
-                    data = tables.open_file(path, "r").root.resolution_f.data
-                print(data)
-                activity = [(x['first_sensor_value']) for x in data if x['serial_number'] == i]
-                time = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M')) for x in data if
-                        x['serial_number'] == i]
+                    data = raw["data_f"]
+
+                activity = [(x[1]) for x in data if x[2] == i]
+                time = [(x[0]) for x in data if x[2] == i]
+                print(activity)
+                print(time)
                 traces.append(go.Bar(
                     x=time,
                     y=activity,
                     name=str(i),
                     opacity=0.6
                 ))
-            print(activity)
-            print(time)
         return {
             'data': traces,
-            'layout': go.Layout(xaxis={'title': 'time'}, yaxis={'title': 'activity level/accelerometer count'},
-                                showlegend=True, legend=dict(y=0.98), margin=go.layout.Margin(l=40, r=50, t=5, b=30))
+            'layout': go.Layout(xaxis={'title': 'Time'}, yaxis={'title': 'Activity level/Accelerometer count'},
+                                showlegend=True, legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+        }
+
+    @app.callback(
+        dash.dependencies.Output('spectrogram-activity-graph', 'figure'),
+        [dash.dependencies.Input('serial-number-dropdown', 'value'),
+         dash.dependencies.Input('resolution-slider', 'value'),
+         dash.dependencies.Input('intermediate-value', 'children')])
+    def update_figure(selected_serial_number, value, intermediate_value):
+        input_ag = []
+        if isinstance(selected_serial_number, list):
+            input_ag.extend(selected_serial_number)
+        else:
+            input_ag.append(selected_serial_number)
+        traces = []
+        if not selected_serial_number:
+            print("selected_serial_number empty")
+        else:
+            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
+            print("1 value is %d" % value)
+            for i in input_ag:
+                data = None
+                raw = json.loads(intermediate_value)
+                print("loaded serial numbers")
+                if value == 0:
+                    data = raw["data_m"]
+                if value == 1:
+                    data = raw["data_w"]
+                if value == 2:
+                    data = raw["data_d"]
+                if value == 3:
+                    data = raw["data_h"]
+                if value == 4:
+                    data = raw["data_h_h"]
+                if value == 5:
+                    data = raw["data_f"]
+
+                activity = [(x[1]) for x in data if x[2] == i]
+                time = [(x[0]) for x in data if x[2] == i]
+                print(activity)
+                print(time)
+
+                N = 512  # Number of point in the fft
+                w = signal.blackman(N)
+                f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w, nfft=N)
+
+                # f, t, Sxx = signal.spectrogram(np.asarray(activity), 0.1)
+                # plt.pcolormesh(t, f, Sxx)
+                # plt.ylabel('Frequency [Hz]')
+                # plt.xlabel('Time [sec]')
+                # mpl_fig = plt.pcolormesh(t, f, Sxx)
+                # plotly_fig = tls.mpl_to_plotly(mpl_fig)
+                traces.append(go.Heatmap(
+                                    x=t,
+                                    y=f,
+                                    z=10*np.log10(Sxx),
+                                    colorscale='Jet',
+                                    ))
+        return {
+            'data': traces,
+            'layout': go.Layout(xaxis={'title': 'Time [sec]'}, yaxis={'title': 'Frequency [Hz]'},
+                                showlegend=True, legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
         }
 
 
     app.css.append_css({"external_url": "https://codepen.io/chriddyp/pen/brPBPO.css"})
-
     app.run_server(debug=True, use_reloader=False)
