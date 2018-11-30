@@ -160,16 +160,16 @@ if __name__ == '__main__':
                        x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
                       for x in h5.root.resolution_h.data]
 
-            data_h_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
-                         x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-                        for x in h5.root.resolution_h_h.data]
+            # data_h_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            #              x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
+            #             for x in h5.root.resolution_h_h.data]
+            #
+            # data_f = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            #            x['serial_number'])
+            #           for x in h5.root.resolution_f.data]
 
-            data_f = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
-                       x['serial_number'])
-                      for x in h5.root.resolution_f.data]
-
-            # data_h_h = []
-            # data_f = []
+            data_h_h = []
+            data_f = []
 
             data = {'serial_numbers': serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
                     'data_h': data_h, 'data_h_h': data_h_h, 'data_f': data_f}
@@ -352,8 +352,8 @@ if __name__ == '__main__':
                 print(activity)
                 print(time)
 
-                N = 512  # Number of point in the fft
-                w = signal.blackman(N)
+                N = int(len(activity)/40)  # Number of point in the fft
+                w = signal.blackman(int(N/1.9))
                 f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w, nfft=N)
 
                 # f, t, Sxx = signal.spectrogram(np.asarray(activity), 0.1)
@@ -365,8 +365,8 @@ if __name__ == '__main__':
                 traces.append(go.Heatmap(
                                     x=t,
                                     y=f,
-                                    z=10*np.log10(Sxx),
-                                    colorscale='Jet',
+                                    z=Sxx,
+                                    colorscale='Viridis',
                                     ))
         return {
             'data': traces,
