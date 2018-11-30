@@ -13,6 +13,7 @@ import tables
 import glob
 
 if __name__ == '__main__':
+    print(dcc.__version__)
     print(sys.argv)
     con = False
     # h5file = None
@@ -40,8 +41,10 @@ if __name__ == '__main__':
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
-    app.layout = html.Div(children=[
-        html.Div(id='intermediate-value', style={'display': 'true'}),
+    app.layout = html.Div([
+        html.Div(id='output'),
+        # Hidden div inside the app that stores the intermediate value
+        html.Div(id='intermediate-value', style={'display': 'none'}),
         html.Img(id='logo', style={'width': '15vh'},
                  src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol-logo.png?itok=V80d7RFe'),
         html.Br(),
@@ -157,36 +160,27 @@ if __name__ == '__main__':
             return json.dumps(data)
 
     @app.callback(
+        dash.dependencies.Output('serial-number-dropdown', 'options'),
+        [dash.dependencies.Input('intermediate-value', 'children')])
+    def update_serial_number_dropdown(intermediate_value):
+        if intermediate_value:
+            data = json.loads(intermediate_value)["serial_numbers"]
+            print("loaded serial numbers")
+            print(data)
+            s_array = []
+            for s in data:
+                s_array.append({'label': str(s), 'value': s})
+            return s_array
+        else:
+            return [{}]
+
+
+    @app.callback(
         dash.dependencies.Output('farm-title', 'children'),
         [dash.dependencies.Input('farm-dropdown', 'value')])
     def update_title(file_path):
         if file_path is not None:
-            return "%s" % file_path
-
-
-    @app.callback(
-        dash.dependencies.Output('serial-number-dropdown', 'value'),
-        [dash.dependencies.Input('farm-dropdown', 'value')])
-    def update_drop_down(farm):
-        return []
-
-
-    @app.callback(
-        dash.dependencies.Output('serial-number-dropdown', 'options'),
-        [dash.dependencies.Input('farm-dropdown', 'value')])
-    def update_drop_down(farm):
-        if farm is not None:
-            path = sys.argv[1] + "\\" + farm
-            print(path)
-            serial_numbers = list(
-                set([(x['serial_number']) for x in tables.open_file(path, "r").root.resolution_h.data.iterrows()]))
-            serial_numbers_array = []
-            for s in serial_numbers:
-                serial_numbers_array.append({'label': str(s), 'value': s})
-            return serial_numbers_array
-        else:
-            return []
-
+            return "Data file: %s" % sys.argv[1] + "\\" + file_path
 
     @app.callback(
         dash.dependencies.Output('signal-strength-graph', 'figure'),
