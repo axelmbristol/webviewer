@@ -17,6 +17,7 @@ from scipy import signal
 import matplotlib.pyplot as plt
 import plotly.tools as tls
 import plotly.plotly as py
+import operator
 
 if __name__ == '__main__':
     print(dcc.__version__)
@@ -144,34 +145,51 @@ if __name__ == '__main__':
             print(serial_numbers)
             print("getting data in file...")
 
-            data_m = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            data_m = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
                        x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
                       for x in h5.root.resolution_m.data]
 
-            data_w = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            data_w = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
                        x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
                       for x in h5.root.resolution_w.data]
 
-            data_d = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            data_d = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
                        x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
                       for x in h5.root.resolution_d.data]
 
-            data_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            data_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
                        x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
                       for x in h5.root.resolution_h.data]
 
-            # data_h_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            # data_h_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
             #              x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
             #             for x in h5.root.resolution_h_h.data]
             #
-            # data_f = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'],
+            # data_f = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
             #            x['serial_number'])
             #           for x in h5.root.resolution_f.data]
 
+            # data_m = []
+            # data_w = []
+            # data_d = []
+            # data_h = []
             data_h_h = []
             data_f = []
 
-            data = {'serial_numbers': serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
+            #sort by serial numbers containing data size
+            map = {}
+            for serial_number in serial_numbers:
+                map[serial_number] = len([x['signal_strength_min'] for x in h5.root.resolution_h.data if x['serial_number'] == serial_number])
+
+            sorted_map = sorted(map.items(), key=operator.itemgetter(1))
+
+            sorted_serial_numbers = []
+            for item in sorted_map:
+                sorted_serial_numbers.append(item[0])
+
+            sorted_serial_numbers.reverse()
+
+            data = {'serial_numbers': sorted_serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
                     'data_h': data_h, 'data_h_h': data_h_h, 'data_f': data_f}
             return json.dumps(data)
 
@@ -299,6 +317,7 @@ if __name__ == '__main__':
 
                 activity = [(x[1]) for x in data if x[2] == i]
                 time = [(x[0]) for x in data if x[2] == i]
+                print("activity level-->")
                 print(activity)
                 print(time)
                 traces.append(go.Bar(
