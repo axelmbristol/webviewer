@@ -79,7 +79,18 @@ if __name__ == '__main__':
                     4: '30Min',
                     5: 'Full'
                 },
-                value=3)], style={'width': '25vh', 'margin-bottom': '2vh', 'margin-left': '1vh'}
+                value=3)], style={'width': '25vh', 'margin-bottom': '3vh', 'margin-left': '1vh'}
+        ),
+        html.Label('Transform:'),
+        dcc.RadioItems(
+            id='transform-radio',
+            options=[
+                {'label': 'Short time Fourrier Transform', 'value': 'STFT'},
+                {'label': 'Continuous Wavelet Transform', 'value': 'CWT'}
+            ],
+            value='CWT',
+            labelStyle={'display': 'inline-block'},
+            style={'margin-bottom': '2vh'}
         ),
         dcc.Graph(
             figure=go.Figure(
@@ -336,8 +347,9 @@ if __name__ == '__main__':
         dash.dependencies.Output('spectrogram-activity-graph', 'figure'),
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
          dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children')])
-    def update_figure(selected_serial_number, value, intermediate_value):
+         dash.dependencies.Input('intermediate-value', 'children'),
+         dash.dependencies.Input('transform-radio', 'value')])
+    def update_figure(selected_serial_number, value, intermediate_value, radio):
         input_ag = []
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
@@ -370,10 +382,16 @@ if __name__ == '__main__':
                 time = [(x[0]) for x in data if x[2] == i]
                 print(activity)
                 print(time)
+                print(radio)
 
-                N = int(len(activity)/40)  # Number of point in the fft
-                w = signal.blackman(int(N/1.9))
-                f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w, nfft=N)
+                w = signal.blackman(40)
+                f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
+
+                widths = np.arange(1, 31)
+                cwtmatr = signal.cwt(np.asarray(activity), signal.ricker, widths)
+                # plt.imshow(cwtmatr, extent=[-1, 1, 1, 31], cmap='PRGn', aspect='auto',
+                #            vmax=abs(cwtmatr).max(), vmin=-abs(cwtmatr).max())
+                # plt.show()
 
                 # f, t, Sxx = signal.spectrogram(np.asarray(activity), 0.1)
                 # plt.pcolormesh(t, f, Sxx)
@@ -381,10 +399,16 @@ if __name__ == '__main__':
                 # plt.xlabel('Time [sec]')
                 # mpl_fig = plt.pcolormesh(t, f, Sxx)
                 # plotly_fig = tls.mpl_to_plotly(mpl_fig)
+
+                if radio == "STFT":
+                    transform = Sxx
+                if radio == "CWT":
+                    transform = cwtmatr
+
                 traces.append(go.Heatmap(
                                     x=t,
                                     y=f,
-                                    z=Sxx,
+                                    z=transform,
                                     colorscale='Viridis',
                                     ))
         return {
