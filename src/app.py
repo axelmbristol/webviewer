@@ -48,50 +48,84 @@ if __name__ == '__main__':
         html.Br(),
         html.Br(),
         html.B(id='farm-title'),
-        html.Label('Farm selection:'),
-        dcc.Dropdown(
-            id='farm-dropdown',
-            options=farm_array,
-            placeholder="Select farm...",
-            style={'width': '55vh', 'margin-bottom': '1vh'}
-            # value=40121100718
-        ),
-        html.Label('Animal selection:'),
-        dcc.Dropdown(
-            id='serial-number-dropdown',
-            options=[],
-            multi=True,
-            placeholder="Select animal...",
-            style={'width': '55vh', 'margin-bottom': '2vh'}
-            # value=40121100718
-        ),
-        html.Label('Data resolution:'),
+
         html.Div([
-            dcc.Slider(
-                id='resolution-slider',
-                min=0,
-                max=5,
-                marks={
-                    0: 'Month',
-                    1: 'Week',
-                    2: 'Day',
-                    3: 'Hour',
-                    4: '30Min',
-                    5: 'Full'
-                },
-                value=3)], style={'width': '25vh', 'margin-bottom': '3vh', 'margin-left': '1vh'}
-        ),
-        html.Label('Transform:'),
-        dcc.RadioItems(
-            id='transform-radio',
-            options=[
-                {'label': 'Short time Fourrier Transform', 'value': 'STFT'},
-                {'label': 'Continuous Wavelet Transform', 'value': 'CWT'}
-            ],
-            value='CWT',
-            labelStyle={'display': 'inline-block'},
-            style={'margin-bottom': '2vh'}
-        ),
+            html.Div([
+                html.Label('Farm selection:'),
+                dcc.Dropdown(
+                    id='farm-dropdown',
+                    options=farm_array,
+                    placeholder="Select farm...",
+                    style={'width': '42.5vh', 'margin-bottom': '1vh'}
+                    # value=40121100718
+                ),
+                html.Label('Animal selection:'),
+                dcc.Dropdown(
+                    id='serial-number-dropdown',
+                    options=[],
+                    multi=True,
+                    placeholder="Select animal...",
+                    style={'width': '42.5vh', 'margin-bottom': '2vh'}
+                    # value=40121100718
+                ),
+
+                html.Div([
+                    html.Div([
+                        html.Label('Sample rate (1 sample per unit of time):'),
+                        dcc.Slider(
+                            id='resolution-slider',
+                            min=0,
+                            max=5,
+                            marks={
+                                0: 'Month',
+                                1: 'Week',
+                                2: 'Day',
+                                3: 'Hour',
+                                4: '30min',
+                                5: 'Full'
+                            },
+                            value=3)],
+                        className='two columns',
+                        style={'width': '23vh', 'margin-bottom': '3vh', 'margin-left': '1vh'}
+                    ),
+                    html.Div([
+                        html.Label('Transform:'),
+                        dcc.RadioItems(
+                            id='transform-radio',
+                            options=[
+                                {'label': 'STFT', 'value': 'STFT'},
+                                {'label': 'CWT', 'value': 'CWT'}
+                            ],
+                            labelStyle={'display': 'inline-block'},
+                            value='CWT')],
+                        className='two columns',
+                        style={'margin-bottom': '3vh', 'margin-left': '4vh', 'width': '10%'}
+                    ),
+                    html.Div([
+                        html.Label('Windows size:', style={'width': '10vh'}),
+                        dcc.Input(
+                            id='window-size-input',
+                            placeholder='Input size of window here...',
+                            type='text',
+                            value='40',
+                            style={'width': '8vh'}
+                        )],
+                        className='two columns'
+
+                    )
+                ],
+                    style={'margin-bottom': '8vh'}
+                )
+            ], className='two columns'),
+
+            html.Div([
+                html.Label('logs:'),
+                html.Div(id='log-div'),
+            ], style={'margin-left': '-2vh'}, className='two columns')
+        ],
+            style={'width': '350vh', 'height': '20vh'}),
+
+
         dcc.Graph(
             figure=go.Figure(
                 data=[
@@ -142,6 +176,16 @@ if __name__ == '__main__':
         )
     ])
 
+
+    @app.callback(dash.dependencies.Output('log-div', 'children'),
+                  [dash.dependencies.Input('serial-number-dropdown', 'value'),
+                   dash.dependencies.Input('resolution-slider', 'value'),
+                   dash.dependencies.Input('intermediate-value', 'children'),
+                   dash.dependencies.Input('transform-radio', 'value')])
+    def clean_data(a1, a2, a3, a4):
+        print("printing log...")
+        global signal_size
+        return "Number of points in signal: %d" % signal_size
 
     @app.callback(dash.dependencies.Output('intermediate-value', 'children'),
                   [dash.dependencies.Input('farm-dropdown', 'value')])
@@ -348,8 +392,9 @@ if __name__ == '__main__':
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
          dash.dependencies.Input('resolution-slider', 'value'),
          dash.dependencies.Input('intermediate-value', 'children'),
+         dash.dependencies.Input('window-size-input', 'value'),
          dash.dependencies.Input('transform-radio', 'value')])
-    def update_figure(selected_serial_number, value, intermediate_value, radio):
+    def update_figure(selected_serial_number, value, intermediate_value, window_size, radio):
         input_ag = []
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
@@ -383,8 +428,11 @@ if __name__ == '__main__':
                 print(activity)
                 print(time)
                 print(radio)
-
-                w = signal.blackman(40)
+                global signal_size
+                signal_size = len(activity)
+                print("window_size")
+                print(window_size)
+                w = signal.blackman(int(window_size))
                 f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
 
                 widths = np.arange(1, 31)
@@ -392,7 +440,6 @@ if __name__ == '__main__':
                 # plt.imshow(cwtmatr, extent=[-1, 1, 1, 31], cmap='PRGn', aspect='auto',
                 #            vmax=abs(cwtmatr).max(), vmin=-abs(cwtmatr).max())
                 # plt.show()
-
                 # f, t, Sxx = signal.spectrogram(np.asarray(activity), 0.1)
                 # plt.pcolormesh(t, f, Sxx)
                 # plt.ylabel('Frequency [Hz]')
@@ -406,11 +453,12 @@ if __name__ == '__main__':
                     transform = cwtmatr
 
                 traces.append(go.Heatmap(
-                                    x=t,
-                                    y=f,
-                                    z=transform,
-                                    colorscale='Viridis',
-                                    ))
+                    x=t,
+                    y=f,
+                    z=transform,
+                    colorscale='Viridis',
+                ))
+
         return {
             'data': traces,
             'layout': go.Layout(xaxis={'title': 'Time [sec]'}, yaxis={'title': 'Frequency [Hz]'},
