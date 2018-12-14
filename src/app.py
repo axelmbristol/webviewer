@@ -1,23 +1,17 @@
 # -*- coding: utf-8 -*-
-import io
-import sys
-import json
-import dash
 import glob
-import ijson
-import pandas
-import pprint
-import numpy as np
-import tables
+import json
+import operator
+import sys
 from datetime import datetime
+
+import dash
 import dash_core_components as dcc
 import dash_html_components as html
+import numpy as np
 import plotly.graph_objs as go
+import tables
 from scipy import signal
-import matplotlib.pyplot as plt
-import plotly.tools as tls
-import plotly.plotly as py
-import operator
 
 if __name__ == '__main__':
     print(dcc.__version__)
@@ -375,6 +369,7 @@ if __name__ == '__main__':
                 print("activity level-->")
                 print(activity)
                 print(time)
+
                 traces.append(go.Bar(
                     x=time,
                     y=activity,
