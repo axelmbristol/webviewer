@@ -4,17 +4,42 @@ import json
 import operator
 import sys
 from datetime import datetime
+from textwrap import dedent as d
 
 import dash
 import dash_core_components as dcc
 import dash_html_components as html
+import dateutil
 import numpy as np
 import plotly.graph_objs as go
 import tables
 from scipy import signal
 
+
+def reset_globals():
+    global signal_size
+    signal_size = 0
+    global max_activity_value
+    max_activity_value = 0
+    global min_activity_value
+    min_activity_value = 0
+    global start_date
+    start_date = ''
+    global end_date
+    end_date = ''
+    global time_range
+    time_range = ''
+
+
+def get_elapsed_time_string(time_initial, time_next):
+    dt1 = datetime.fromtimestamp(time_initial)
+    dt2 = datetime.fromtimestamp(time_next)
+    rd = dateutil.relativedelta.relativedelta(dt2, dt1)
+    return '%d years %d months %d days %d hours %d minutes %d seconds' % (rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds)
+
+
 if __name__ == '__main__':
-    print(dcc.__version__)
+    print("dash ccv %s" % dcc.__version__)
     print(sys.argv)
     con = False
     files_in_data_directory = glob.glob("%s\*.h5" % sys.argv[1])
@@ -27,6 +52,13 @@ if __name__ == '__main__':
     print('init dash...')
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+
+    styles = {
+        'pre': {
+            'border': 'thin lightgrey solid',
+            'overflowX': 'scroll'
+        }
+    }
 
     app.layout = html.Div([
         html.Div(id='output'),
@@ -43,6 +75,8 @@ if __name__ == '__main__':
         html.Br(),
         html.B(id='farm-title'),
 
+        html.Div([html.Pre(id='relayout-data', style={'display': 'none'})], className='three columns'),
+
         html.Div([
             html.Div([
                 html.Label('Farm selection:'),
@@ -50,7 +84,7 @@ if __name__ == '__main__':
                     id='farm-dropdown',
                     options=farm_array,
                     placeholder="Select farm...",
-                    style={'width': '42.5vh', 'margin-bottom': '1vh'}
+                    style={'width': '47vh', 'margin-bottom': '1vh'}
                     # value=40121100718
                 ),
                 html.Label('Animal selection:'),
@@ -59,7 +93,7 @@ if __name__ == '__main__':
                     options=[],
                     multi=True,
                     placeholder="Select animal...",
-                    style={'width': '42.5vh', 'margin-bottom': '2vh'}
+                    style={'width': '47vh', 'margin-bottom': '2vh'}
                     # value=40121100718
                 ),
 
@@ -78,7 +112,7 @@ if __name__ == '__main__':
                                 4: '30min',
                                 5: 'Full'
                             },
-                            value=3)],
+                            value=2)],
                         className='two columns',
                         style={'width': '23vh', 'margin-bottom': '3vh', 'margin-left': '1vh'}
                     ),
@@ -93,16 +127,16 @@ if __name__ == '__main__':
                             labelStyle={'display': 'inline-block'},
                             value='CWT')],
                         className='two columns',
-                        style={'margin-bottom': '3vh', 'margin-left': '4vh', 'width': '10%'}
+                        style={'margin-bottom': '3vh', 'margin-left': '4vh', 'width': '19%'}
                     ),
                     html.Div([
-                        html.Label('Windows size:', style={'width': '10vh'}),
+                        html.Label('Window size:', style={'width': '10vh', 'margin-left': '0vh'}),
                         dcc.Input(
                             id='window-size-input',
                             placeholder='Input size of window here...',
                             type='text',
                             value='40',
-                            style={'width': '8vh'}
+                            style={'width': '8vh', 'margin-left': '0vh'}
                         )],
                         className='two columns'
 
@@ -113,11 +147,11 @@ if __name__ == '__main__':
             ], className='two columns'),
 
             html.Div([
-                html.Label('logs:'),
+                # html.Label('logs:'),
                 html.Div(id='log-div'),
-            ], style={'margin-left': '-2vh'}, className='two columns')
+            ], style={'margin-left': '3vh', 'margin-top': '0vh'}, className='two columns')
         ],
-            style={'width': '350vh', 'height': '20vh'}),
+            style={'width': '350vh', 'height': '25vh'}),
 
 
         dcc.Graph(
@@ -133,7 +167,7 @@ if __name__ == '__main__':
                     margin=go.layout.Margin(l=40, r=50, t=5, b=30)
                 )
             ),
-            style={'height': '20vh'},
+            style={'height': '23vh'},
             id='activity-graph'
         ),
         dcc.Graph(
@@ -147,6 +181,7 @@ if __name__ == '__main__':
                 ],
                 layout=go.Layout(
                     margin=go.layout.Margin(l=40, r=50, t=5, b=30)
+
                 )
             ),
             style={'height': '20vh'},
@@ -170,6 +205,20 @@ if __name__ == '__main__':
         )
     ])
 
+    @app.callback(
+        dash.dependencies.Output('signal-strength-graph', 'relayoutData'),
+        [dash.dependencies.Input('relayout-data', 'children')])
+    def display_selected_data(relayoutData):
+        print('test2')
+        return json.loads(relayoutData)
+
+
+    @app.callback(
+        dash.dependencies.Output('relayout-data', 'children'),
+        [dash.dependencies.Input('activity-graph', 'relayoutData')])
+    def display_selected_data(relayoutData):
+        return json.dumps(relayoutData, indent=2)
+
 
     @app.callback(dash.dependencies.Output('log-div', 'children'),
                   [dash.dependencies.Input('serial-number-dropdown', 'value'),
@@ -179,7 +228,19 @@ if __name__ == '__main__':
     def clean_data(a1, a2, a3, a4):
         print("printing log...")
         global signal_size
-        return "Number of points in signal: %d" % signal_size
+        global max_activity_value
+        global min_activity_value
+        global start_date
+        global end_date
+        global time_range
+        return html.Div([
+            html.P("Number of points in signal: %d" % signal_size),
+            html.P("Max activity value: %d" % max_activity_value),
+            html.P("Min activity value: %d" % min_activity_value),
+            html.P("Start date: %s" % start_date),
+            html.P("End date: %s" % end_date),
+            html.P("Time range: %s" % time_range)
+        ])
 
     @app.callback(dash.dependencies.Output('intermediate-value', 'children'),
                   [dash.dependencies.Input('farm-dropdown', 'value')])
@@ -246,6 +307,7 @@ if __name__ == '__main__':
         dash.dependencies.Output('serial-number-dropdown', 'options'),
         [dash.dependencies.Input('intermediate-value', 'children')])
     def update_serial_number_drop_down(intermediate_value):
+        reset_globals()
         if intermediate_value:
             data = json.loads(intermediate_value)["serial_numbers"]
             # objects = ijson.items(io.StringIO(intermediate_value), 'serial_numbers')
@@ -264,6 +326,7 @@ if __name__ == '__main__':
         dash.dependencies.Output('farm-title', 'children'),
         [dash.dependencies.Input('farm-dropdown', 'value')])
     def update_title(file_path):
+        reset_globals()
         if file_path is not None:
             return "Data file: %s" % sys.argv[1] + "\\" + file_path
 
@@ -272,8 +335,9 @@ if __name__ == '__main__':
         dash.dependencies.Output('signal-strength-graph', 'figure'),
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
          dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children')])
-    def update_figure(selected_serial_number, value, intermediate_value):
+         dash.dependencies.Input('intermediate-value', 'children'),
+         dash.dependencies.Input('relayout-data', 'children')])
+    def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
         input_ss = []
         if isinstance(selected_serial_number, list):
             input_ss.extend(selected_serial_number)
@@ -323,11 +387,42 @@ if __name__ == '__main__':
                             y=signal_strength_max,
                             name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
                         ))
-        return {
-            'data': traces,
-            'layout': go.Layout(xaxis={'title': 'Time'}, yaxis={'title': 'RSSI(received signal strength in)'},
-                                legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-        }
+        print(relayout_data)
+        layout_data = json.loads(relayout_data)
+        try:
+            xaxis_autorange = bool(layout_data["xaxis.autorange"])
+        except KeyError:
+            xaxis_autorange = False
+        try:
+            auto_range = layout_data["autosize"]
+        except KeyError:
+            auto_range = False
+        try:
+            x_min = layout_data["xaxis.range[0]"]
+        except KeyError:
+            x_min = None
+        try:
+            x_max = layout_data["xaxis.range[1]"]
+        except KeyError:
+            x_max = None
+
+        if x_max is not None:
+            return {
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
+                                    yaxis={'title': 'RSSI(received signal strength in)'},
+                                    autosize=auto_range,
+                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            }
+        else:
+            return {
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
+                                                                                                'strength in)',
+                                                                                       'autorange': True},
+                                    autosize=True,
+                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            }
 
 
     @app.callback(
@@ -369,6 +464,12 @@ if __name__ == '__main__':
                 print("activity level-->")
                 print(activity)
                 print(time)
+                global signal_size
+                signal_size = len(activity)
+                global max_activity_value
+                max_activity_value = max(activity)
+                global min_activity_value
+                min_activity_value = min(activity)
 
                 traces.append(go.Bar(
                     x=time,
@@ -388,8 +489,9 @@ if __name__ == '__main__':
          dash.dependencies.Input('resolution-slider', 'value'),
          dash.dependencies.Input('intermediate-value', 'children'),
          dash.dependencies.Input('window-size-input', 'value'),
-         dash.dependencies.Input('transform-radio', 'value')])
-    def update_figure(selected_serial_number, value, intermediate_value, window_size, radio):
+         dash.dependencies.Input('transform-radio', 'value'),
+         dash.dependencies.Input('relayout-data', 'children')])
+    def update_figure(selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
         input_ag = []
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
@@ -423,8 +525,21 @@ if __name__ == '__main__':
                 print(activity)
                 print(time)
                 print(radio)
-                global signal_size
-                signal_size = len(activity)
+
+                s_d = time[0]
+                e_d = time[len(time)-1]
+
+                d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+                d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+
+                global start_date
+                start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
+                global end_date
+                end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
+
+                global time_range
+                time_range = get_elapsed_time_string(d1, d2)
+
                 print("window_size")
                 print(window_size)
                 w = signal.blackman(int(window_size))
@@ -448,17 +563,61 @@ if __name__ == '__main__':
                     transform = cwtmatr
 
                 traces.append(go.Heatmap(
-                    x=t,
+                    x=time,
                     y=f,
                     z=transform,
                     colorscale='Viridis',
                 ))
+        print(relayout_data)
+        layout_data = json.loads(relayout_data)
+        try:
+            xaxis_autorange = bool(layout_data["xaxis.autorange"])
+        except KeyError:
+            xaxis_autorange = False
+        try:
+            yaxis_autorange = bool(layout_data["yaxis.autorange"])
+        except KeyError:
+            yaxis_autorange = False
+        try:
+            auto_range = layout_data["autosize"]
+        except KeyError:
+            auto_range = False
+        try:
+            x_min = layout_data["xaxis.range[0]"]
+        except KeyError:
+            x_min = None
+        try:
+            x_max = layout_data["xaxis.range[1]"]
+        except KeyError:
+            x_max = None
+        try:
+            y_min = layout_data["yaxis.range[0]"]
+        except KeyError:
+            y_min = None
+        try:
+            y_max = layout_data["yaxis.range[1]"]
+        except KeyError:
+            y_max = None
 
-        return {
-            'data': traces,
-            'layout': go.Layout(xaxis={'title': 'Time [sec]'}, yaxis={'title': 'Frequency [Hz]'},
-                                showlegend=True, legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-        }
+        if x_max is not None:
+            return {
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time [sec]', 'range': [x_min, x_max], 'autorange': xaxis_autorange},
+                                    yaxis={'title': 'Frequency [Hz]'},
+                                    autosize=auto_range,
+                                    showlegend=True, legend=dict(y=0.98),
+                                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            }
+        else:
+            return {
+                'data': traces,
+                'layout': go.Layout(
+                    xaxis={'title': 'Time [sec]', 'autorange': True},
+                    yaxis={'title': 'Frequency [Hz]', 'autorange': True},
+                    autosize=True,
+                    showlegend=True, legend=dict(y=0.98),
+                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            }
 
 
     app.css.append_css({"external_url": "https://codepen.io/chriddyp/pen/brPBPO.css"})
