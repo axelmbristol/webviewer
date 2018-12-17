@@ -114,7 +114,7 @@ if __name__ == '__main__':
                                 4: '30min',
                                 5: 'Full'
                             },
-                            value=2)],
+                            value=1)],
                         className='two columns',
                         style={'width': '23vh', 'margin-bottom': '3vh', 'margin-left': '1vh'}
                     ),
@@ -159,7 +159,7 @@ if __name__ == '__main__':
         dcc.Graph(
             figure=go.Figure(
                 data=[
-                    go.Bar(
+                    go.Scattergl(
                         x=[],
                         y=[],
                         name='',
@@ -192,7 +192,7 @@ if __name__ == '__main__':
         dcc.Graph(
             figure=go.Figure(
                 data=[
-                    go.Scatter(
+                    go.Scattergl(
                         x=[],
                         y=[],
                         name='',
@@ -255,21 +255,21 @@ if __name__ == '__main__':
             print(path)
             print("getting serial numbers...")
             h5 = tables.open_file(path, "r")
-            serial_numbers = list(set([(x['serial_number']) for x in h5.root.resolution_h.data.iterrows()]))
+            serial_numbers = list(set([(x['serial_number']) for x in h5.root.resolution_m.data.iterrows()]))
             print(serial_numbers)
             print("getting data in file...")
 
-            data_m = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-                       x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-                      for x in h5.root.resolution_m.data]
+            # data_m = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
+            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
+            #           for x in h5.root.resolution_m.data]
+            #
+            # data_w = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
+            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
+            #           for x in h5.root.resolution_w.data]
 
-            data_w = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-                       x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-                      for x in h5.root.resolution_w.data]
-
-            data_d = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-                       x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-                      for x in h5.root.resolution_d.data]
+            # data_d = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
+            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
+            #           for x in h5.root.resolution_d.data]
 
             # data_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
             #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
@@ -283,9 +283,9 @@ if __name__ == '__main__':
             #            x['serial_number'])
             #           for x in h5.root.resolution_f.data]
 
-            # data_m = []
-            # data_w = []
-            # data_d = []
+            data_m = []
+            data_w = []
+            data_d = []
             data_h = []
             data_h_h = []
             data_f = []
@@ -303,8 +303,10 @@ if __name__ == '__main__':
 
             sorted_serial_numbers.reverse()
 
-            data = {'serial_numbers': sorted_serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
-                    'data_h': data_h, 'data_h_h': data_h_h, 'data_f': data_f}
+            # data = {'serial_numbers': sorted_serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
+            #         'data_h': data_h, 'data_h_h': data_h_h, 'data_f': data_f}
+            # return json.dumps(data)
+            data = {'serial_numbers': sorted_serial_numbers, 'file_path': path}
             return json.dumps(data)
 
     @app.callback(
@@ -355,36 +357,48 @@ if __name__ == '__main__':
                 data = None
                 raw = json.loads(intermediate_value)
                 print("loaded serial numbers")
+                file_path = raw["file_path"]
+                h5 = tables.open_file(file_path, "r")
                 if value == 0:
-                    data = raw["data_m"]
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_m.data if x['serial_number'] == i]
                 if value == 1:
-                    data = raw["data_w"]
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_w.data if x['serial_number'] == i]
                 if value == 2:
-                    data = raw["data_d"]
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_d.data if x['serial_number'] == i]
                 if value == 3:
-                    data = raw["data_h"]
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_h.data if x['serial_number'] == i]
                 if value == 4:
-                    data = raw["data_h_h"]
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_h_h.data if x['serial_number'] == i]
                 if value == 5:
-                    data = raw["data_f"]
+                    data = []
 
                 if value is not 5:
-                    signal_strength_min = [(x[4]) for x in data if x[2] == i]
-                    signal_strength_max = [(x[3]) for x in data if x[2] == i]
-                    time = [(x[0]) for x in data if x[2] == i]
+                    signal_strength_min = [(x[2]) for x in data]
+                    signal_strength_max = [(x[1]) for x in data]
+                    time = [(x[0]) for x in data]
                     print(signal_strength_min)
                     print(signal_strength_max)
                     print(time)
 
                     if signal_strength_min is not None:
-                        traces.append(go.Scatter(
+                        traces.append(go.Scattergl(
                             x=time,
                             y=signal_strength_min,
                             name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
 
                         ))
                     if signal_strength_max is not None:
-                        traces.append(go.Scatter(
+                        traces.append(go.Scattergl(
                             x=time,
                             y=signal_strength_max,
                             name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
@@ -414,7 +428,8 @@ if __name__ == '__main__':
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
                                     yaxis={'title': 'RSSI(received signal strength in)'},
                                     autosize=auto_range,
-                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+                                    showlegend=True,
+                                    legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
             }
         else:
             return {
@@ -423,7 +438,8 @@ if __name__ == '__main__':
                                                                                                 'strength in)',
                                                                                        'autorange': True},
                                     autosize=True,
-                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+                                    showlegend=True,
+                                    legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
             }
 
 
