@@ -53,6 +53,8 @@ if __name__ == '__main__':
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
+    server = app.server
+
     styles = {
         'pre': {
             'border': 'thin lightgrey solid',
@@ -205,20 +207,22 @@ if __name__ == '__main__':
         )
     ])
 
-    @app.callback(
-        dash.dependencies.Output('signal-strength-graph', 'relayoutData'),
-        [dash.dependencies.Input('relayout-data', 'children')])
-    def display_selected_data(relayoutData):
-        print('test2')
-        return json.loads(relayoutData)
-
 
     @app.callback(
         dash.dependencies.Output('relayout-data', 'children'),
-        [dash.dependencies.Input('activity-graph', 'relayoutData')])
-    def display_selected_data(relayoutData):
-        return json.dumps(relayoutData, indent=2)
+        [dash.dependencies.Input('activity-graph', 'relayoutData'),
+         dash.dependencies.Input('signal-strength-graph', 'relayoutData'),
+         dash.dependencies.Input('spectrogram-activity-graph', 'relayoutData'),
+         dash.dependencies.Input('farm-dropdown', 'value')])
+    def display_selected_data(v1, v2, v3, v4):
+        if "autosize" not in v1 and "xaxis.autorange" not in v1:
+            return json.dumps(v1, indent=2)
+        if "autosize" not in v2 and "xaxis.autorange" not in v2:
+            return json.dumps(v2, indent=2)
+        if "autosize" not in v3 and "xaxis.autorange" not in v3:
+            return json.dumps(v3, indent=2)
 
+        return json.dumps({'autosize': True}, indent=2)
 
     @app.callback(dash.dependencies.Output('log-div', 'children'),
                   [dash.dependencies.Input('serial-number-dropdown', 'value'),
@@ -267,9 +271,9 @@ if __name__ == '__main__':
                        x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
                       for x in h5.root.resolution_d.data]
 
-            data_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-                       x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-                      for x in h5.root.resolution_h.data]
+            # data_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
+            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
+            #           for x in h5.root.resolution_h.data]
 
             # data_h_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
             #              x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
@@ -282,7 +286,7 @@ if __name__ == '__main__':
             # data_m = []
             # data_w = []
             # data_d = []
-            # data_h = []
+            data_h = []
             data_h_h = []
             data_f = []
 
@@ -310,8 +314,6 @@ if __name__ == '__main__':
         reset_globals()
         if intermediate_value:
             data = json.loads(intermediate_value)["serial_numbers"]
-            # objects = ijson.items(io.StringIO(intermediate_value), 'serial_numbers')
-            # columns = list(objects)
             print("loaded serial numbers")
             print(data)
             s_array = []
@@ -429,14 +431,16 @@ if __name__ == '__main__':
         dash.dependencies.Output('activity-graph', 'figure'),
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
          dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children')])
-    def update_figure(selected_serial_number, value, intermediate_value):
+         dash.dependencies.Input('intermediate-value', 'children'),
+         dash.dependencies.Input('relayout-data', 'children')])
+    def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
         input_ag = []
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
         else:
             input_ag.append(selected_serial_number)
         traces = []
+        x_max = None
         if not selected_serial_number:
             print("selected_serial_number empty")
         else:
@@ -477,11 +481,48 @@ if __name__ == '__main__':
                     name=str(i),
                     opacity=0.6
                 ))
-        return {
-            'data': traces,
-            'layout': go.Layout(xaxis={'title': 'Time'}, yaxis={'title': 'Activity level/Accelerometer count'},
-                                showlegend=True, legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-        }
+
+                print(relayout_data)
+                layout_data = json.loads(relayout_data)
+                try:
+                    xaxis_autorange = bool(layout_data["xaxis.autorange"])
+                except KeyError:
+                    xaxis_autorange = False
+                try:
+                    auto_range = layout_data["autosize"]
+                except KeyError:
+                    auto_range = False
+                try:
+                    x_min = layout_data["xaxis.range[0]"]
+                except KeyError:
+                    x_min = None
+                try:
+                    x_max = layout_data["xaxis.range[1]"]
+                except KeyError:
+                    x_max = None
+
+        if x_max is not None:
+            return {
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
+                                    yaxis={'title': 'Activity level/Accelerometer count'},
+                                    autosize=auto_range,
+                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            }
+        else:
+            return {
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'Activity level/Accelerometer count',
+                                                                                       'autorange': True},
+                                    autosize=True,
+                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            }
+
+        # return {
+        #     'data': traces,
+        #     'layout': go.Layout(xaxis={'title': 'Time'}, yaxis={'title': 'Activity level/Accelerometer count'},
+        #                         showlegend=True, legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+        # }
 
     @app.callback(
         dash.dependencies.Output('spectrogram-activity-graph', 'figure'),
