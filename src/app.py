@@ -48,7 +48,7 @@ def get_elapsed_time_string(time_initial, time_next):
     return '%d years %d months %d days %d hours %d minutes %d seconds' % (rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds)
 
 
-def thread_test(q, selected_serial_number, value, intermediate_value, relayout_data):
+def thread_activity(q, selected_serial_number, value, intermediate_value, relayout_data):
         input_ag = []
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
@@ -732,7 +732,7 @@ if __name__ == '__main__':
          dash.dependencies.Input('intermediate-value', 'children'),
          dash.dependencies.Input('relayout-data', 'children')])
     def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
-        p = Process(target=thread_test, args=(q, selected_serial_number, value, intermediate_value, relayout_data,))
+        p = Process(target=thread_activity, args=(q, selected_serial_number, value, intermediate_value, relayout_data,))
         p.start()
         result = q.get()
         p.join()
