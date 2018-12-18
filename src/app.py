@@ -3,8 +3,12 @@ import glob
 import json
 import operator
 import sys
+from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import datetime
 from textwrap import dedent as d
+from time import mktime
+from time import strptime
+import threading
 
 import dash
 import dash_core_components as dcc
@@ -14,6 +18,12 @@ import numpy as np
 import plotly.graph_objs as go
 import tables
 from scipy import signal
+from multiprocessing.pool import ThreadPool
+import pandas as pd
+import multitables
+
+from multiprocessing import Pool
+from multiprocessing import Process, Queue
 
 
 def reset_globals():
@@ -38,9 +48,389 @@ def get_elapsed_time_string(time_initial, time_next):
     return '%d years %d months %d days %d hours %d minutes %d seconds' % (rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds)
 
 
+def thread_test(q, selected_serial_number, value, intermediate_value, relayout_data):
+        input_ag = []
+        if isinstance(selected_serial_number, list):
+            input_ag.extend(selected_serial_number)
+        else:
+            input_ag.append(selected_serial_number)
+        traces = []
+        x_max = None
+        if not selected_serial_number:
+            print("selected_serial_number empty")
+        else:
+            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
+            print("1 value is %d" % value)
+            for i in input_ag:
+                data = None
+                x_min_epoch = 0.0
+                x_max_epoch = 9352963810.0
+                print(relayout_data)
+                layout_data = json.loads(relayout_data)
+                try:
+                    xaxis_autorange = bool(layout_data["xaxis.autorange"])
+                except KeyError:
+                    xaxis_autorange = False
+                try:
+                    auto_range = layout_data["autosize"]
+                except KeyError:
+                    auto_range = False
+                try:
+                    x_min = layout_data["xaxis.range[0]"]
+                    x_min_epoch = int(mktime(strptime(x_min, '%Y-%m-%d %H:%M:%S.%f')))
+                except KeyError:
+                    x_min = None
+                try:
+                    x_max = layout_data["xaxis.range[1]"]
+                    x_max_epoch = int(mktime(strptime(x_max, '%Y-%m-%d %H:%M:%S.%f')))
+                except KeyError:
+                    x_max = None
+
+                raw = json.loads(intermediate_value)
+                file_path = raw["file_path"]
+                print("opening file in thread test")
+                h5 = tables.open_file(file_path, "r")
+
+                if value == 0:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_m.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 1:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_w.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 2:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_d.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 3:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_h.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 4:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_h_h.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 5:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_f.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                h5.close()
+                activity = [(x[1]) for x in data]
+                time = [(x[0]) for x in data]
+                print("activity level-->")
+                print(activity)
+                print(time)
+                global signal_size
+                signal_size = len(activity)
+                global max_activity_value
+                max_activity_value = max(activity)
+                global min_activity_value
+                min_activity_value = min(activity)
+
+                traces.append(go.Bar(
+                    x=time,
+                    y=activity,
+                    name=str(i),
+                    opacity=0.6
+                ))
+
+        if x_max is not None:
+            q.put({
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
+                                    yaxis={'title': 'Activity level/Accelerometer count'},
+                                    autosize=auto_range,
+                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            })
+        else:
+            q.put({
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True},
+                                    yaxis={'title': 'Activity level/Accelerometer count',
+                                           'autorange': True},
+                                    autosize=True,
+                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            })
+
+
+def thread_signal(q, selected_serial_number, value, intermediate_value, relayout_data):
+        input_ss = []
+        x_max = None
+        if isinstance(selected_serial_number, list):
+            input_ss.extend(selected_serial_number)
+        else:
+            input_ss.append(selected_serial_number)
+        traces = []
+        if not selected_serial_number:
+            print("2 selected_serial_number empty")
+        else:
+            print("2 the selected serial number are: %s" % ', '.join(str(e) for e in input_ss))
+            print("2 file opened value=%d" % value)
+            for i in input_ss:
+                data = None
+                x_min_epoch = 0.0
+                x_max_epoch = 9352963810.0
+                print(relayout_data)
+                layout_data = json.loads(relayout_data)
+                try:
+                    xaxis_autorange = bool(layout_data["xaxis.autorange"])
+                except KeyError:
+                    xaxis_autorange = False
+                try:
+                    auto_range = layout_data["autosize"]
+                except KeyError:
+                    auto_range = False
+                try:
+                    x_min = layout_data["xaxis.range[0]"]
+                except KeyError:
+                    x_min = None
+                try:
+                    x_max = layout_data["xaxis.range[1]"]
+                except KeyError:
+                    x_max = None
+
+                raw = json.loads(intermediate_value)
+                file_path = raw["file_path"]
+                print("opening file in thread signal")
+                h5 = tables.open_file(file_path, "r")
+                if value == 0:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_m.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 1:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_w.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 2:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_d.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 3:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_h.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 4:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'], x['signal_strength_min'])
+                            for x in h5.root.resolution_h_h.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 5:
+                    data = []
+                h5.close()
+
+                if value is not 5:
+                    signal_strength_min = [(x[2]) for x in data]
+                    signal_strength_max = [(x[1]) for x in data]
+                    time = [(x[0]) for x in data]
+                    print(signal_strength_min)
+                    print(signal_strength_max)
+                    print(time)
+
+                    if signal_strength_min is not None:
+                        traces.append(go.Scattergl(
+                            x=time,
+                            y=signal_strength_min,
+                            name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
+
+                        ))
+                    if signal_strength_max is not None:
+                        traces.append(go.Scattergl(
+                            x=time,
+                            y=signal_strength_max,
+                            name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
+                        ))
+
+        if x_max is not None:
+            q.put({
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
+                                    yaxis={'title': 'RSSI(received signal strength in)'},
+                                    autosize=auto_range,
+                                    showlegend=True,
+                                    legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            })
+        else:
+            q.put({
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
+                                                                                                'strength in)',
+                                                                                       'autorange': True},
+                                    autosize=True,
+                                    showlegend=True,
+                                    legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            })
+
+
+def thread_spectrogram(q, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
+        input_ag = []
+        x_max = None
+        if isinstance(selected_serial_number, list):
+            input_ag.extend(selected_serial_number)
+        else:
+            input_ag.append(selected_serial_number)
+        traces = []
+        if not selected_serial_number:
+            print("selected_serial_number empty")
+        else:
+            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
+            print("1 value is %d" % value)
+            for i in input_ag:
+                data = None
+                x_min_epoch = 0.0
+                x_max_epoch = 9352963810.0
+                print(relayout_data)
+                layout_data = json.loads(relayout_data)
+                try:
+                    xaxis_autorange = bool(layout_data["xaxis.autorange"])
+                except KeyError:
+                    xaxis_autorange = False
+                try:
+                    yaxis_autorange = bool(layout_data["yaxis.autorange"])
+                except KeyError:
+                    yaxis_autorange = False
+                try:
+                    auto_range = layout_data["autosize"]
+                except KeyError:
+                    auto_range = False
+                try:
+                    x_min = layout_data["xaxis.range[0]"]
+                except KeyError:
+                    x_min = None
+                try:
+                    x_max = layout_data["xaxis.range[1]"]
+                except KeyError:
+                    x_max = None
+                try:
+                    y_min = layout_data["yaxis.range[0]"]
+                except KeyError:
+                    y_min = None
+                try:
+                    y_max = layout_data["yaxis.range[1]"]
+                except KeyError:
+                    y_max = None
+                raw = json.loads(intermediate_value)
+                file_path = raw["file_path"]
+                print("opening file in thread spectogram")
+                h5 = tables.open_file(file_path, "r")
+
+                if value == 0:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_m.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 1:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_w.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 2:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_d.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 3:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_h.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 4:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_h_h.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                if value == 5:
+                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['first_sensor_value'])
+                            for x in h5.root.resolution_f.data if
+                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                h5.close()
+                activity = [(x[1]) for x in data]
+                time = [(x[0]) for x in data]
+
+                print(activity)
+                print(time)
+                print(radio)
+
+                s_d = time[0]
+                e_d = time[len(time) - 1]
+
+                d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+                d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+
+                global start_date
+                start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
+                global end_date
+                end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
+
+                global time_range
+                time_range = get_elapsed_time_string(d1, d2)
+
+                print("window_size")
+                print(window_size)
+                w = signal.blackman(int(window_size))
+                f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
+
+                widths = np.arange(1, 31)
+                cwtmatr = signal.cwt(np.asarray(activity), signal.ricker, widths)
+                # plt.imshow(cwtmatr, extent=[-1, 1, 1, 31], cmap='PRGn', aspect='auto',
+                #            vmax=abs(cwtmatr).max(), vmin=-abs(cwtmatr).max())
+                # plt.show()
+                # f, t, Sxx = signal.spectrogram(np.asarray(activity), 0.1)
+                # plt.pcolormesh(t, f, Sxx)
+                # plt.ylabel('Frequency [Hz]')
+                # plt.xlabel('Time [sec]')
+                # mpl_fig = plt.pcolormesh(t, f, Sxx)
+                # plotly_fig = tls.mpl_to_plotly(mpl_fig)
+
+                if radio == "STFT":
+                    transform = Sxx
+                if radio == "CWT":
+                    transform = cwtmatr
+
+                traces.append(go.Heatmap(
+                    x=time,
+                    y=f,
+                    z=transform,
+                    colorscale='Viridis',
+                ))
+
+        if x_max is not None:
+            q.put({
+                'data': traces,
+                'layout': go.Layout(
+                    xaxis={'title': 'Time [sec]', 'range': [x_min, x_max], 'autorange': xaxis_autorange},
+                    yaxis={'title': 'Frequency [Hz]'},
+                    autosize=auto_range,
+                    showlegend=True, legend=dict(y=0.98),
+                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            })
+        else:
+            q.put({
+                'data': traces,
+                'layout': go.Layout(
+                    xaxis={'title': 'Time [sec]', 'autorange': True},
+                    yaxis={'title': 'Frequency [Hz]', 'autorange': True},
+                    autosize=True,
+                    showlegend=True, legend=dict(y=0.98),
+                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            })
+
+
 if __name__ == '__main__':
     print("dash ccv %s" % dcc.__version__)
     print(sys.argv)
+    q = Queue()
     con = False
     files_in_data_directory = glob.glob("%s\*.h5" % sys.argv[1])
     farm_array = []
@@ -112,7 +502,7 @@ if __name__ == '__main__':
                                 2: 'Day',
                                 3: 'Hour',
                                 4: '30min',
-                                5: 'Full'
+                                5: '3min'
                             },
                             value=1)],
                         className='two columns',
@@ -255,6 +645,7 @@ if __name__ == '__main__':
             print(path)
             print("getting serial numbers...")
             h5 = tables.open_file(path, "r")
+
             serial_numbers = list(set([(x['serial_number']) for x in h5.root.resolution_m.data.iterrows()]))
             print(serial_numbers)
             print("getting data in file...")
@@ -334,115 +725,6 @@ if __name__ == '__main__':
         if file_path is not None:
             return "Data file: %s" % sys.argv[1] + "\\" + file_path
 
-
-    @app.callback(
-        dash.dependencies.Output('signal-strength-graph', 'figure'),
-        [dash.dependencies.Input('serial-number-dropdown', 'value'),
-         dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children'),
-         dash.dependencies.Input('relayout-data', 'children')])
-    def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
-        input_ss = []
-        if isinstance(selected_serial_number, list):
-            input_ss.extend(selected_serial_number)
-        else:
-            input_ss.append(selected_serial_number)
-        traces = []
-        if not selected_serial_number:
-            print("2 selected_serial_number empty")
-        else:
-            print("2 the selected serial number are: %s" % ', '.join(str(e) for e in input_ss))
-            print("2 file opened value=%d" % value)
-            for i in input_ss:
-                data = None
-                raw = json.loads(intermediate_value)
-                print("loaded serial numbers")
-                file_path = raw["file_path"]
-                h5 = tables.open_file(file_path, "r")
-                if value == 0:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_m.data if x['serial_number'] == i]
-                if value == 1:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_w.data if x['serial_number'] == i]
-                if value == 2:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_d.data if x['serial_number'] == i]
-                if value == 3:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_h.data if x['serial_number'] == i]
-                if value == 4:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_h_h.data if x['serial_number'] == i]
-                if value == 5:
-                    data = []
-
-                if value is not 5:
-                    signal_strength_min = [(x[2]) for x in data]
-                    signal_strength_max = [(x[1]) for x in data]
-                    time = [(x[0]) for x in data]
-                    print(signal_strength_min)
-                    print(signal_strength_max)
-                    print(time)
-
-                    if signal_strength_min is not None:
-                        traces.append(go.Scattergl(
-                            x=time,
-                            y=signal_strength_min,
-                            name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
-
-                        ))
-                    if signal_strength_max is not None:
-                        traces.append(go.Scattergl(
-                            x=time,
-                            y=signal_strength_max,
-                            name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
-                        ))
-        print(relayout_data)
-        layout_data = json.loads(relayout_data)
-        try:
-            xaxis_autorange = bool(layout_data["xaxis.autorange"])
-        except KeyError:
-            xaxis_autorange = False
-        try:
-            auto_range = layout_data["autosize"]
-        except KeyError:
-            auto_range = False
-        try:
-            x_min = layout_data["xaxis.range[0]"]
-        except KeyError:
-            x_min = None
-        try:
-            x_max = layout_data["xaxis.range[1]"]
-        except KeyError:
-            x_max = None
-
-        if x_max is not None:
-            return {
-                'data': traces,
-                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
-                                    yaxis={'title': 'RSSI(received signal strength in)'},
-                                    autosize=auto_range,
-                                    showlegend=True,
-                                    legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }
-        else:
-            return {
-                'data': traces,
-                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
-                                                                                                'strength in)',
-                                                                                       'autorange': True},
-                                    autosize=True,
-                                    showlegend=True,
-                                    legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }
-
-
     @app.callback(
         dash.dependencies.Output('activity-graph', 'figure'),
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
@@ -450,90 +732,13 @@ if __name__ == '__main__':
          dash.dependencies.Input('intermediate-value', 'children'),
          dash.dependencies.Input('relayout-data', 'children')])
     def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
-        input_ag = []
-        if isinstance(selected_serial_number, list):
-            input_ag.extend(selected_serial_number)
-        else:
-            input_ag.append(selected_serial_number)
-        traces = []
-        x_max = None
-        if not selected_serial_number:
-            print("selected_serial_number empty")
-        else:
-            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
-            print("1 value is %d" % value)
-            for i in input_ag:
-                data = None
-                raw = json.loads(intermediate_value)
-                print("loaded serial numbers")
-                if value == 0:
-                    data = raw["data_m"]
-                if value == 1:
-                    data = raw["data_w"]
-                if value == 2:
-                    data = raw["data_d"]
-                if value == 3:
-                    data = raw["data_h"]
-                if value == 4:
-                    data = raw["data_h_h"]
-                if value == 5:
-                    data = raw["data_f"]
-
-                activity = [(x[1]) for x in data if x[2] == i]
-                time = [(x[0]) for x in data if x[2] == i]
-                print("activity level-->")
-                print(activity)
-                print(time)
-                global signal_size
-                signal_size = len(activity)
-                global max_activity_value
-                max_activity_value = max(activity)
-                global min_activity_value
-                min_activity_value = min(activity)
-
-                traces.append(go.Bar(
-                    x=time,
-                    y=activity,
-                    name=str(i),
-                    opacity=0.6
-                ))
-
-                print(relayout_data)
-                layout_data = json.loads(relayout_data)
-                try:
-                    xaxis_autorange = bool(layout_data["xaxis.autorange"])
-                except KeyError:
-                    xaxis_autorange = False
-                try:
-                    auto_range = layout_data["autosize"]
-                except KeyError:
-                    auto_range = False
-                try:
-                    x_min = layout_data["xaxis.range[0]"]
-                except KeyError:
-                    x_min = None
-                try:
-                    x_max = layout_data["xaxis.range[1]"]
-                except KeyError:
-                    x_max = None
-
-        if x_max is not None:
-            return {
-                'data': traces,
-                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
-                                    yaxis={'title': 'Activity level/Accelerometer count'},
-                                    autosize=auto_range,
-                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }
-        else:
-            return {
-                'data': traces,
-                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'Activity level/Accelerometer count',
-                                                                                       'autorange': True},
-                                    autosize=True,
-                                    legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }
-
+        p = Process(target=thread_test, args=(q, selected_serial_number, value, intermediate_value, relayout_data,))
+        p.start()
+        result = q.get()
+        p.join()
+        return result
+        # async_result = p.map(thread_test, selected_serial_number, value, intermediate_value, relayout_data)  # tuple of args for foo
+        # return async_result.result()
         # return {
         #     'data': traces,
         #     'layout': go.Layout(xaxis={'title': 'Time'}, yaxis={'title': 'Activity level/Accelerometer count'},
@@ -549,133 +754,29 @@ if __name__ == '__main__':
          dash.dependencies.Input('transform-radio', 'value'),
          dash.dependencies.Input('relayout-data', 'children')])
     def update_figure(selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
-        input_ag = []
-        if isinstance(selected_serial_number, list):
-            input_ag.extend(selected_serial_number)
-        else:
-            input_ag.append(selected_serial_number)
-        traces = []
-        if not selected_serial_number:
-            print("selected_serial_number empty")
-        else:
-            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
-            print("1 value is %d" % value)
-            for i in input_ag:
-                data = None
-                raw = json.loads(intermediate_value)
-                print("loaded serial numbers")
-                if value == 0:
-                    data = raw["data_m"]
-                if value == 1:
-                    data = raw["data_w"]
-                if value == 2:
-                    data = raw["data_d"]
-                if value == 3:
-                    data = raw["data_h"]
-                if value == 4:
-                    data = raw["data_h_h"]
-                if value == 5:
-                    data = raw["data_f"]
+        p = Process(target=thread_spectrogram, args=(q, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data,))
+        p.start()
+        result = q.get()
+        p.join()
+        return result
+        # async_result = executor.submit(thread_spectrogram, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data)  # tuple of args for foo
+        # return async_result.result()
 
-                activity = [(x[1]) for x in data if x[2] == i]
-                time = [(x[0]) for x in data if x[2] == i]
-                print(activity)
-                print(time)
-                print(radio)
 
-                s_d = time[0]
-                e_d = time[len(time)-1]
-
-                d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
-                d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
-
-                global start_date
-                start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
-                global end_date
-                end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
-
-                global time_range
-                time_range = get_elapsed_time_string(d1, d2)
-
-                print("window_size")
-                print(window_size)
-                w = signal.blackman(int(window_size))
-                f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
-
-                widths = np.arange(1, 31)
-                cwtmatr = signal.cwt(np.asarray(activity), signal.ricker, widths)
-                # plt.imshow(cwtmatr, extent=[-1, 1, 1, 31], cmap='PRGn', aspect='auto',
-                #            vmax=abs(cwtmatr).max(), vmin=-abs(cwtmatr).max())
-                # plt.show()
-                # f, t, Sxx = signal.spectrogram(np.asarray(activity), 0.1)
-                # plt.pcolormesh(t, f, Sxx)
-                # plt.ylabel('Frequency [Hz]')
-                # plt.xlabel('Time [sec]')
-                # mpl_fig = plt.pcolormesh(t, f, Sxx)
-                # plotly_fig = tls.mpl_to_plotly(mpl_fig)
-
-                if radio == "STFT":
-                    transform = Sxx
-                if radio == "CWT":
-                    transform = cwtmatr
-
-                traces.append(go.Heatmap(
-                    x=time,
-                    y=f,
-                    z=transform,
-                    colorscale='Viridis',
-                ))
-        print(relayout_data)
-        layout_data = json.loads(relayout_data)
-        try:
-            xaxis_autorange = bool(layout_data["xaxis.autorange"])
-        except KeyError:
-            xaxis_autorange = False
-        try:
-            yaxis_autorange = bool(layout_data["yaxis.autorange"])
-        except KeyError:
-            yaxis_autorange = False
-        try:
-            auto_range = layout_data["autosize"]
-        except KeyError:
-            auto_range = False
-        try:
-            x_min = layout_data["xaxis.range[0]"]
-        except KeyError:
-            x_min = None
-        try:
-            x_max = layout_data["xaxis.range[1]"]
-        except KeyError:
-            x_max = None
-        try:
-            y_min = layout_data["yaxis.range[0]"]
-        except KeyError:
-            y_min = None
-        try:
-            y_max = layout_data["yaxis.range[1]"]
-        except KeyError:
-            y_max = None
-
-        if x_max is not None:
-            return {
-                'data': traces,
-                'layout': go.Layout(xaxis={'title': 'Time [sec]', 'range': [x_min, x_max], 'autorange': xaxis_autorange},
-                                    yaxis={'title': 'Frequency [Hz]'},
-                                    autosize=auto_range,
-                                    showlegend=True, legend=dict(y=0.98),
-                                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }
-        else:
-            return {
-                'data': traces,
-                'layout': go.Layout(
-                    xaxis={'title': 'Time [sec]', 'autorange': True},
-                    yaxis={'title': 'Frequency [Hz]', 'autorange': True},
-                    autosize=True,
-                    showlegend=True, legend=dict(y=0.98),
-                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }
-
+    @app.callback(
+        dash.dependencies.Output('signal-strength-graph', 'figure'),
+        [dash.dependencies.Input('serial-number-dropdown', 'value'),
+         dash.dependencies.Input('resolution-slider', 'value'),
+         dash.dependencies.Input('intermediate-value', 'children'),
+         dash.dependencies.Input('relayout-data', 'children')])
+    def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
+        p = Process(target=thread_signal, args=(q, selected_serial_number, value, intermediate_value, relayout_data,))
+        p.start()
+        result = q.get()
+        p.join()
+        return result
+        # async_result = executor.submit(thread_signal, selected_serial_number, value, intermediate_value, relayout_data)  # tuple of args for foo
+        # return async_result.result()
 
     app.css.append_css({"external_url": "https://codepen.io/chriddyp/pen/brPBPO.css"})
     app.run_server(debug=True, use_reloader=False)
