@@ -48,8 +48,9 @@ def get_elapsed_time_string(time_initial, time_next):
     return '%d years %d months %d days %d hours %d minutes %d seconds' % (rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds)
 
 
-def thread_activity(q, selected_serial_number, value, intermediate_value, relayout_data):
+def thread_activity(q_1, selected_serial_number, value, intermediate_value, relayout_data):
         input_ag = []
+        activity = []
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
         else:
@@ -87,43 +88,48 @@ def thread_activity(q, selected_serial_number, value, intermediate_value, relayo
                     x_max = None
 
                 raw = json.loads(intermediate_value)
-                file_path = raw["file_path"]
-                print("opening file in thread test")
-                h5 = tables.open_file(file_path, "r")
 
-                if value == 0:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_m.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 1:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_w.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 2:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_d.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 3:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 4:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 5:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_f.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                h5.close()
-                activity = [(x[1]) for x in data]
-                time = [(x[0]) for x in data]
+                if q_1.get()['activity'] is not None:
+                    activity = q_1.get()['activity']
+                    time = q_1.get()['time']
+                else:
+                    file_path = raw["file_path"]
+                    print("opening file in thread test")
+                    h5 = tables.open_file(file_path, "r")
+
+                    if value == 0:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_m.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 1:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_w.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 2:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_d.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 3:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_h.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 4:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_h_h.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 5:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_f.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    h5.close()
+                    activity = [(x[1]) for x in data]
+                    time = [(x[0]) for x in data]
                 print("activity level-->")
                 print(activity)
                 print(time)
@@ -142,25 +148,25 @@ def thread_activity(q, selected_serial_number, value, intermediate_value, relayo
                 ))
 
         if x_max is not None:
-            q.put({
+            q_1.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
                                     yaxis={'title': 'Activity level/Accelerometer count'},
                                     autosize=auto_range,
                                     legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            })
+            }])
         else:
-            q.put({
+            q_1.put([{'thread_activity': True}, {'activity': activity}, {
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True},
                                     yaxis={'title': 'Activity level/Accelerometer count',
                                            'autorange': True},
                                     autosize=True,
                                     legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            })
+            }])
 
 
-def thread_signal(q, selected_serial_number, value, intermediate_value, relayout_data):
+def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayout_data):
         input_ss = []
         x_max = None
         if isinstance(selected_serial_number, list):
@@ -252,7 +258,7 @@ def thread_signal(q, selected_serial_number, value, intermediate_value, relayout
                         ))
 
         if x_max is not None:
-            q.put({
+            q_2.put({
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': xaxis_autorange, 'range': [x_min, x_max]},
                                     yaxis={'title': 'RSSI(received signal strength in)'},
@@ -261,7 +267,7 @@ def thread_signal(q, selected_serial_number, value, intermediate_value, relayout
                                     legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
             })
         else:
-            q.put({
+            q_2.put({
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
                                                                                                 'strength in)',
@@ -272,8 +278,9 @@ def thread_signal(q, selected_serial_number, value, intermediate_value, relayout
             })
 
 
-def thread_spectrogram(q, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
+def thread_spectrogram(q_1, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
         input_ag = []
+        activity = []
         x_max = None
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
@@ -320,43 +327,48 @@ def thread_spectrogram(q, selected_serial_number, value, intermediate_value, win
                 except KeyError:
                     y_max = None
                 raw = json.loads(intermediate_value)
-                file_path = raw["file_path"]
-                print("opening file in thread spectogram")
-                h5 = tables.open_file(file_path, "r")
 
-                if value == 0:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_m.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 1:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_w.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 2:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_d.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 3:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 4:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 5:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_f.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                h5.close()
-                activity = [(x[1]) for x in data]
-                time = [(x[0]) for x in data]
+                if q_1.get()['activity'] is not None:
+                    activity = q_1.get()['activity']
+                    time = q_1.get()['time']
+                else:
+                    file_path = raw["file_path"]
+                    print("opening file in thread spectogram")
+                    h5 = tables.open_file(file_path, "r")
+
+                    if value == 0:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_m.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 1:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_w.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 2:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_d.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 3:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_h.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 4:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_h_h.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if value == 5:
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['first_sensor_value'])
+                                for x in h5.root.resolution_f.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    h5.close()
+                    activity = [(x[1]) for x in data]
+                    time = [(x[0]) for x in data]
 
                 print(activity)
                 print(time)
@@ -379,6 +391,7 @@ def thread_spectrogram(q, selected_serial_number, value, intermediate_value, win
                 print("window_size")
                 print(window_size)
                 w = signal.blackman(int(window_size))
+                print(activity)
                 f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
 
                 widths = np.arange(1, 31)
@@ -406,7 +419,7 @@ def thread_spectrogram(q, selected_serial_number, value, intermediate_value, win
                 ))
 
         if x_max is not None:
-            q.put({
+            q_1.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
                 'data': traces,
                 'layout': go.Layout(
                     xaxis={'title': 'Time [sec]', 'range': [x_min, x_max], 'autorange': xaxis_autorange},
@@ -414,9 +427,9 @@ def thread_spectrogram(q, selected_serial_number, value, intermediate_value, win
                     autosize=auto_range,
                     showlegend=True, legend=dict(y=0.98),
                     margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            })
+            }])
         else:
-            q.put({
+            q_1.put([{'thread_activity': True}, {'activity': activity}, {
                 'data': traces,
                 'layout': go.Layout(
                     xaxis={'title': 'Time [sec]', 'autorange': True},
@@ -424,13 +437,15 @@ def thread_spectrogram(q, selected_serial_number, value, intermediate_value, win
                     autosize=True,
                     showlegend=True, legend=dict(y=0.98),
                     margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            })
+            }])
 
 
 if __name__ == '__main__':
     print("dash ccv %s" % dcc.__version__)
     print(sys.argv)
-    q = Queue()
+    q_1 = Queue()
+    q_2 = Queue()
+    q_3 = Queue()
     con = False
     files_in_data_directory = glob.glob("%s\*.h5" % sys.argv[1])
     farm_array = []
@@ -650,37 +665,6 @@ if __name__ == '__main__':
             print(serial_numbers)
             print("getting data in file...")
 
-            # data_m = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-            #           for x in h5.root.resolution_m.data]
-            #
-            # data_w = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-            #           for x in h5.root.resolution_w.data]
-
-            # data_d = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-            #           for x in h5.root.resolution_d.data]
-
-            # data_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-            #            x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-            #           for x in h5.root.resolution_h.data]
-
-            # data_h_h = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-            #              x['serial_number'], x['signal_strength_max'], x['signal_strength_min'])
-            #             for x in h5.root.resolution_h_h.data]
-            #
-            # data_f = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), abs(x['first_sensor_value']),
-            #            x['serial_number'])
-            #           for x in h5.root.resolution_f.data]
-
-            data_m = []
-            data_w = []
-            data_d = []
-            data_h = []
-            data_h_h = []
-            data_f = []
-
             #sort by serial numbers containing data size
             map = {}
             for serial_number in serial_numbers:
@@ -732,18 +716,11 @@ if __name__ == '__main__':
          dash.dependencies.Input('intermediate-value', 'children'),
          dash.dependencies.Input('relayout-data', 'children')])
     def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
-        p = Process(target=thread_activity, args=(q, selected_serial_number, value, intermediate_value, relayout_data,))
+        p = Process(target=thread_activity, args=(q_1, selected_serial_number, value, intermediate_value, relayout_data,))
         p.start()
-        result = q.get()
+        result = q_1.get()[3]
         p.join()
         return result
-        # async_result = p.map(thread_test, selected_serial_number, value, intermediate_value, relayout_data)  # tuple of args for foo
-        # return async_result.result()
-        # return {
-        #     'data': traces,
-        #     'layout': go.Layout(xaxis={'title': 'Time'}, yaxis={'title': 'Activity level/Accelerometer count'},
-        #                         showlegend=True, legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-        # }
 
     @app.callback(
         dash.dependencies.Output('spectrogram-activity-graph', 'figure'),
@@ -754,14 +731,11 @@ if __name__ == '__main__':
          dash.dependencies.Input('transform-radio', 'value'),
          dash.dependencies.Input('relayout-data', 'children')])
     def update_figure(selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
-        p = Process(target=thread_spectrogram, args=(q, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data,))
+        p = Process(target=thread_spectrogram, args=(q_1, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data,))
         p.start()
-        result = q.get()
+        result = q_1.get()[3]
         p.join()
         return result
-        # async_result = executor.submit(thread_spectrogram, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data)  # tuple of args for foo
-        # return async_result.result()
-
 
     @app.callback(
         dash.dependencies.Output('signal-strength-graph', 'figure'),
@@ -770,13 +744,11 @@ if __name__ == '__main__':
          dash.dependencies.Input('intermediate-value', 'children'),
          dash.dependencies.Input('relayout-data', 'children')])
     def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
-        p = Process(target=thread_signal, args=(q, selected_serial_number, value, intermediate_value, relayout_data,))
+        p = Process(target=thread_signal, args=(q_3, selected_serial_number, value, intermediate_value, relayout_data,))
         p.start()
-        result = q.get()
+        result = q_3.get()
         p.join()
         return result
-        # async_result = executor.submit(thread_signal, selected_serial_number, value, intermediate_value, relayout_data)  # tuple of args for foo
-        # return async_result.result()
 
     app.css.append_css({"external_url": "https://codepen.io/chriddyp/pen/brPBPO.css"})
     app.run_server(debug=True, use_reloader=False)
