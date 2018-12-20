@@ -16,6 +16,9 @@ import numpy as np
 import plotly.graph_objs as go
 import tables
 from scipy import signal
+import flask
+from flask_caching import Cache
+import os
 
 
 def reset_globals():
@@ -56,8 +59,8 @@ def get_date_range(layout_data):
         x_min = None
     try:
         x_max = layout_data["xaxis.range[1]"]
-        if len(x_min.split(":")) == 2:
-            x_min = x_min + ":00"
+        if len(x_max.split(":")) == 2:
+            x_max = x_max + ":00"
         if "." not in x_max:
             x_max = x_max + ".00"
         x_max_epoch = int(mktime(strptime(x_max, '%Y-%m-%d %H:%M:%S.%f')))
@@ -109,6 +112,7 @@ def find_appropriate_resolution(duration):
     return value
 
 
+@cache.memoize()
 def thread_activity(q_1, selected_serial_number, value, intermediate_value, relayout_data):
         input_ag = []
         activity = []
@@ -296,7 +300,7 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
                             x=time,
                             y=signal_strength_,
                             mode='lines+markers',
-                            name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
+                            name=("signal strength%d" % i) if (len(input_ss) > 1) else "signal strength"
 
                         ))
 
@@ -442,7 +446,7 @@ def thread_spectrogram(q_3, selected_serial_number, value, intermediate_value, w
                 'data': traces,
                 'layout': go.Layout(
                     xaxis={'title': 'Time', 'range': [range_d['x_min'], range_d['x_max']], 'autorange': range_d['xaxis_autorange']},
-                    yaxis={'title': 'Frequency [Hz]'},
+                    yaxis={'title': 'Frequency'},
                     autosize=range_d['auto_range'],
                     showlegend=True, legend=dict(y=0.98),
                     margin=go.layout.Margin(l=60, r=50, t=5, b=40))
@@ -452,7 +456,7 @@ def thread_spectrogram(q_3, selected_serial_number, value, intermediate_value, w
                 'data': traces,
                 'layout': go.Layout(
                     xaxis={'title': 'Time', 'autorange': True},
-                    yaxis={'title': 'Frequency [Hz]', 'autorange': True},
+                    yaxis={'title': 'Frequency', 'autorange': True},
                     autosize=True,
                     showlegend=True, legend=dict(y=0.98),
                     margin=go.layout.Margin(l=60, r=50, t=5, b=40))
@@ -476,6 +480,13 @@ if __name__ == '__main__':
     print('init dash...')
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+    CACHE_CONFIG = {
+        # try 'filesystem' if you don't want to setup redis
+        'CACHE_TYPE': 'filesystem',
+        'CACHE_REDIS_URL': os.environ.get('REDIS_URL', 'localhost:6379')
+    }
+    cache = Cache()
+    cache.init_app(app.server, config=CACHE_CONFIG)
 
     server = app.server
 
@@ -655,9 +666,11 @@ if __name__ == '__main__':
                   [dash.dependencies.Input('serial-number-dropdown', 'value'),
                    dash.dependencies.Input('resolution-slider', 'value'),
                    dash.dependencies.Input('intermediate-value', 'children'),
-                   dash.dependencies.Input('transform-radio', 'value')])
-    def clean_data(a1, a2, a3, a4):
+                   dash.dependencies.Input('transform-radio', 'value'),
+                   dash.dependencies.Input('activity-graph', 'selectedData')])
+    def clean_data(a1, a2, a3, a4, data):
         print("printing log...")
+        print(data)
         global signal_size
         global max_activity_value
         global min_activity_value
