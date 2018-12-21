@@ -13,28 +13,10 @@ import dash_core_components as dcc
 import dash_html_components as html
 import dateutil
 import numpy as np
+import plotly
 import plotly.graph_objs as go
 import tables
 from scipy import signal
-import flask
-from flask_caching import Cache
-import os
-
-
-def reset_globals():
-    global signal_size
-    signal_size = 0
-    global max_activity_value
-    max_activity_value = 0
-    global min_activity_value
-    min_activity_value = 0
-    global start_date
-    start_date = ''
-    global end_date
-    end_date = ''
-    global time_range
-    time_range = ''
-
 
 def get_date_range(layout_data):
     print(layout_data)
@@ -112,11 +94,15 @@ def find_appropriate_resolution(duration):
     return value
 
 
-@cache.memoize()
 def thread_activity(q_1, selected_serial_number, value, intermediate_value, relayout_data):
         input_ag = []
         activity = []
         time = []
+        signal_size, max_activity_value, min_activity_value = 0, 0, 0
+        start_date = None
+        end_date = None
+        time_range = None
+
         if isinstance(selected_serial_number, list):
             input_ag.extend(selected_serial_number)
         else:
@@ -178,13 +164,18 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                 print("activity level-->resolution=%d" % value)
                 print(activity)
                 print(time)
+
                 if len(activity) > 0:
-                    global signal_size
                     signal_size = len(activity)
-                    global max_activity_value
                     max_activity_value = max(activity)
-                    global min_activity_value
                     min_activity_value = min(activity)
+                s_d = time[0]
+                e_d = time[len(time) - 1]
+                d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+                d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+                start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
+                end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
+                time_range = get_elapsed_time_string(d1, d2)
 
                 traces.append(go.Bar(
                     x=time,
@@ -194,7 +185,9 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                 ))
 
         if x_max is not None:
-            q_1.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
+            q_1.put([{'thread_activity': True}, {'signal_size': signal_size}, {'min_activity_value': min_activity_value},
+                     {'max_activity_value': max_activity_value}, {'start_date': start_date},
+                     {'end_date': end_date}, {'time_range': time_range}, {
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'], 'range': [range_d['x_min'], range_d['x_max']]},
                                     yaxis={'title': 'Activity level/Accelerometer count'},
@@ -202,7 +195,9 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                                     legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
             }])
         else:
-            q_1.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
+            q_1.put([{'thread_activity': True}, {'signal_size': signal_size}, {'min_activity_value': min_activity_value},
+                     {'max_activity_value': max_activity_value}, {'start_date': start_date},
+                     {'end_date': end_date}, {'time_range': time_range},  {
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True},
                                     yaxis={'title': 'Activity level/Accelerometer count',
@@ -392,21 +387,6 @@ def thread_spectrogram(q_3, selected_serial_number, value, intermediate_value, w
                 print(activity)
                 print(time)
                 print(radio)
-
-                s_d = time[0]
-                e_d = time[len(time) - 1]
-
-                d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
-                d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
-
-                global start_date
-                start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
-                global end_date
-                end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
-
-                global time_range
-                time_range = get_elapsed_time_string(d1, d2)
-
                 print("window_size")
                 if activity is not None and window_size is not None:
                     if int(window_size) > len(activity):
@@ -480,13 +460,6 @@ if __name__ == '__main__':
     print('init dash...')
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
-    CACHE_CONFIG = {
-        # try 'filesystem' if you don't want to setup redis
-        'CACHE_TYPE': 'filesystem',
-        'CACHE_REDIS_URL': os.environ.get('REDIS_URL', 'localhost:6379')
-    }
-    cache = Cache()
-    cache.init_app(app.server, config=CACHE_CONFIG)
 
     server = app.server
 
@@ -501,6 +474,7 @@ if __name__ == '__main__':
         html.Div(id='output'),
         # Hidden div inside the app that stores the intermediate value
         html.Div(id='intermediate-value', style={'display': 'none'}),
+        html.Div(id='figure-data', style={'display': 'none'}),
         html.Img(id='logo', style={'width': '15vh'},
                  src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol'
                      '-logo.png?itok=V80d7RFe'),
@@ -663,20 +637,17 @@ if __name__ == '__main__':
         return json.dumps({'autosize': True}, indent=2)
 
     @app.callback(dash.dependencies.Output('log-div', 'children'),
-                  [dash.dependencies.Input('serial-number-dropdown', 'value'),
-                   dash.dependencies.Input('resolution-slider', 'value'),
-                   dash.dependencies.Input('intermediate-value', 'children'),
-                   dash.dependencies.Input('transform-radio', 'value'),
-                   dash.dependencies.Input('activity-graph', 'selectedData')])
-    def clean_data(a1, a2, a3, a4, data):
+                  [dash.dependencies.Input('figure-data', 'children')])
+    def clean_data(data):
         print("printing log...")
         print(data)
-        global signal_size
-        global max_activity_value
-        global min_activity_value
-        global start_date
-        global end_date
-        global time_range
+        d = json.loads(data)
+        signal_size = d[1]['signal_size']
+        max_activity_value = d[3]['max_activity_value']
+        min_activity_value = d[2]['min_activity_value']
+        start_date = d[4]['start_date']
+        end_date = d[5]['end_date']
+        time_range = d[6]['time_range']
         return html.Div([
             html.P("Number of points in signal: %d" % signal_size),
             html.P("Max activity value: %d" % max_activity_value),
@@ -723,7 +694,6 @@ if __name__ == '__main__':
         dash.dependencies.Output('serial-number-dropdown', 'options'),
         [dash.dependencies.Input('intermediate-value', 'children')])
     def update_serial_number_drop_down(intermediate_value):
-        reset_globals()
         if intermediate_value:
             data = json.loads(intermediate_value)["serial_numbers"]
             print("loaded serial numbers")
@@ -740,12 +710,11 @@ if __name__ == '__main__':
         dash.dependencies.Output('farm-title', 'children'),
         [dash.dependencies.Input('farm-dropdown', 'value')])
     def update_title(file_path):
-        reset_globals()
         if file_path is not None:
             return "Data file: %s" % sys.argv[1] + "\\" + file_path
 
     @app.callback(
-        dash.dependencies.Output('activity-graph', 'figure'),
+        dash.dependencies.Output('figure-data', 'children'),
         [dash.dependencies.Input('serial-number-dropdown', 'value'),
          dash.dependencies.Input('resolution-slider', 'value'),
          dash.dependencies.Input('intermediate-value', 'children'),
@@ -755,7 +724,19 @@ if __name__ == '__main__':
         p.start()
         result = q_1.get()
         p.join()
-        return result[3]
+        return json.dumps(result, cls=plotly.utils.PlotlyJSONEncoder)
+
+    @app.callback(
+        dash.dependencies.Output('activity-graph', 'figure'),
+        [dash.dependencies.Input('figure-data', 'children')])
+    def update_figure(data):
+        print(data)
+        figure = json.loads(data)[7]
+        result = {
+            'data': figure['data'],
+            'layout': go.Layout(figure['layout'])
+        }
+        return result
 
     @app.callback(
         dash.dependencies.Output('spectrogram-activity-graph', 'figure'),
