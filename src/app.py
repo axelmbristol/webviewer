@@ -11,15 +11,16 @@ from time import strptime
 import dash
 import dash_core_components as dcc
 import dash_html_components as html
-import dateutil
 import numpy as np
 import plotly
 import plotly.graph_objs as go
 import tables
 from scipy import signal
+from dateutil.relativedelta import *
+
 
 def get_date_range(layout_data):
-    print(layout_data)
+    # print(layout_data)
     x_min_epoch = 0.0
     x_max_epoch = 19352963810.0
     try:
@@ -56,25 +57,25 @@ def get_date_range(layout_data):
 def get_elapsed_time_string(time_initial, time_next):
     dt1 = datetime.fromtimestamp(time_initial)
     dt2 = datetime.fromtimestamp(time_next)
-    rd = dateutil.relativedelta.relativedelta(dt2, dt1)
+    rd = relativedelta(dt2, dt1)
     return '%d years %d months %d days %d hours %d minutes %d seconds' % (rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds)
 
 
 def get_elapsed_time_array(time_initial, time_next):
     dt1 = datetime.fromtimestamp(time_initial)
     dt2 = datetime.fromtimestamp(time_next)
-    rd = dateutil.relativedelta.relativedelta(dt2, dt1)
+    rd = relativedelta(dt2, dt1)
     return [rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds]
 
 
 def get_elapsed_time_seconds(time_initial, time_next):
     dt1 = datetime.fromtimestamp(time_initial)
     dt2 = datetime.fromtimestamp(time_next)
-    rd = dateutil.relativedelta.relativedelta(dt2, dt1)
+    rd = relativedelta(dt2, dt1)
     result = (dt2-dt1).total_seconds()
-    print("elpased time input, %d, %d", time_initial, time_next)
-    print(result)
-    print([rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds])
+    # print("elpased time input, %d, %d", time_initial, time_next)
+    # print(result)
+    # print([rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds])
     return result
 
 
@@ -112,13 +113,14 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
         if not selected_serial_number:
             print("selected_serial_number empty")
         else:
-            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
-            print("1 value is %d" % value)
+            # print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
+            # print("1 value is %d" % value)
             for i in input_ag:
                 data = None
                 range_d = get_date_range(json.loads(relayout_data))
                 x_max_epoch = range_d['x_max_epoch']
                 x_min_epoch = range_d['x_min_epoch']
+                x_max = range_d['x_max']
                 if range_d['x_max'] is not None:
                     value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
 
@@ -162,32 +164,33 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                 activity = [(x[1]) for x in data]
                 time = [(x[0]) for x in data]
                 print("activity level-->resolution=%d" % value)
-                print(activity)
-                print(time)
+                # print(activity)
+                # print(time)
 
                 if len(activity) > 0:
                     signal_size = len(activity)
                     max_activity_value = max(activity)
                     min_activity_value = min(activity)
-                s_d = time[0]
-                e_d = time[len(time) - 1]
-                d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
-                d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
-                start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
-                end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
-                time_range = get_elapsed_time_string(d1, d2)
+                    s_d = time[0]
+                    e_d = time[len(time) - 1]
+                    d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+                    d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+                    start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
+                    end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
+                    time_range = get_elapsed_time_string(d1, d2)
 
-                traces.append(go.Bar(
-                    x=time,
-                    y=activity,
-                    name=str(i),
-                    opacity=0.6
-                ))
-
+                    traces.append(go.Bar(
+                        x=time,
+                        y=activity,
+                        name=str(i),
+                        opacity=0.6
+                    ))
+        print("x_max", x_max)
         if x_max is not None:
             q_1.put([{'thread_activity': True}, {'signal_size': signal_size}, {'min_activity_value': min_activity_value},
                      {'max_activity_value': max_activity_value}, {'start_date': start_date},
-                     {'end_date': end_date}, {'time_range': time_range}, {
+                     {'end_date': end_date}, {'time_range': time_range},
+                     {'activity': activity}, {'time': time}, {'relayout_data': relayout_data}, {
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'], 'range': [range_d['x_min'], range_d['x_max']]},
                                     yaxis={'title': 'Activity level/Accelerometer count'},
@@ -197,7 +200,8 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
         else:
             q_1.put([{'thread_activity': True}, {'signal_size': signal_size}, {'min_activity_value': min_activity_value},
                      {'max_activity_value': max_activity_value}, {'start_date': start_date},
-                     {'end_date': end_date}, {'time_range': time_range},  {
+                     {'end_date': end_date}, {'time_range': time_range},
+                     {'activity': activity}, {'time': time}, {'relayout_data': relayout_data}, {
                 'data': traces,
                 'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True},
                                     yaxis={'title': 'Activity level/Accelerometer count',
@@ -218,8 +222,6 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
         if not selected_serial_number:
             print("2 selected_serial_number empty")
         else:
-            print("2 the selected serial number are: %s" % ', '.join(str(e) for e in input_ss))
-            print("2 file opened value=%d" % value)
             for i in input_ss:
                 data = None
                 range_d = get_date_range(json.loads(relayout_data))
@@ -270,9 +272,6 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
                     signal_strength_min = [(x[2]) for x in data]
                     signal_strength_max = [(x[1]) for x in data]
                     print("thread_signal resolution=%d" % value)
-                    print(signal_strength_min)
-                    print(signal_strength_max)
-                    print(time)
                     if signal_strength_min is not None:
                         traces.append(go.Scatter(
                             x=time,
@@ -320,127 +319,57 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
             })
 
 
-def thread_spectrogram(q_3, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
-        input_ag = []
-        activity = []
-        time = []
-        x_max = None
-        if isinstance(selected_serial_number, list):
-            input_ag.extend(selected_serial_number)
-        else:
-            input_ag.append(selected_serial_number)
-        traces = []
-        if not selected_serial_number:
-            print("selected_serial_number empty")
-        else:
-            print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
-            print("1 value is %d" % value)
-            for i in input_ag:
-                data = None
-                range_d = get_date_range(json.loads(relayout_data))
-                x_max_epoch = range_d['x_max_epoch']
-                x_min_epoch = range_d['x_min_epoch']
-                if range_d['x_max'] is not None:
-                    value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
+def thread_spectrogram(q_3,  activity_d, time_d, window_size, radio, relayout):
 
-                raw = json.loads(intermediate_value)
+    range_d = get_date_range(json.loads(relayout['relayout_data']))
+    print("thread_spectrogram")
+    activity = activity_d["activity"]
+    time = time_d["time"]
+    # print(activity, time, window_size, radio, relayout)
+    x_max = range_d['x_max']
+    traces = []
+    # print("activity in spec", activity)
+    if len(activity) > 1:
+        if activity is not None and window_size is not None:
+            if int(window_size) > len(activity):
+                window_size = int(len(activity))
 
-                file_path = raw["file_path"]
-                print("opening file in thread spectogram")
-                h5 = tables.open_file(file_path, "r")
+        w = signal.blackman(int(window_size))
+        f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
 
-                if value == 0:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_m.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 1:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_w.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 2:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_d.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 3:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 4:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if value == 5:
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_f.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                h5.close()
-                activity = [(x[1]) for x in data]
-                time = [(x[0]) for x in data]
+        widths = np.arange(1, 31)
+        cwtmatr = signal.cwt(np.asarray(activity), signal.ricker, widths)
+        if radio == "STFT":
+            transform = Sxx
+        if radio == "CWT":
+            transform = cwtmatr
+        traces.append(go.Heatmap(
+            x=time,
+            y=f,
+            z=transform,
+            colorscale='Viridis',
+        ))
 
-                print("thread_spectrogram resolution=%d" % value)
-                print(activity)
-                print(time)
-                print(radio)
-                print("window_size")
-                if activity is not None and window_size is not None:
-                    if int(window_size) > len(activity):
-                        window_size = int(len(activity))
-
-                print(window_size)
-                w = signal.blackman(int(window_size))
-                print(activity)
-                f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
-
-                widths = np.arange(1, 31)
-                cwtmatr = signal.cwt(np.asarray(activity), signal.ricker, widths)
-                # plt.imshow(cwtmatr, extent=[-1, 1, 1, 31], cmap='PRGn', aspect='auto',
-                #            vmax=abs(cwtmatr).max(), vmin=-abs(cwtmatr).max())
-                # plt.show()
-                # f, t, Sxx = signal.spectrogram(np.asarray(activity), 0.1)
-                # plt.pcolormesh(t, f, Sxx)
-                # plt.ylabel('Frequency [Hz]')
-                # plt.xlabel('Time [sec]')
-                # mpl_fig = plt.pcolormesh(t, f, Sxx)
-                # plotly_fig = tls.mpl_to_plotly(mpl_fig)
-
-                if radio == "STFT":
-                    transform = Sxx
-                if radio == "CWT":
-                    transform = cwtmatr
-
-                traces.append(go.Heatmap(
-                    x=time,
-                    y=f,
-                    z=transform,
-                    colorscale='Viridis',
-                ))
-
-        if x_max is not None:
-            q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
-                'data': traces,
-                'layout': go.Layout(
-                    xaxis={'title': 'Time', 'range': [range_d['x_min'], range_d['x_max']], 'autorange': range_d['xaxis_autorange']},
-                    yaxis={'title': 'Frequency'},
-                    autosize=range_d['auto_range'],
-                    showlegend=True, legend=dict(y=0.98),
-                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }])
-        else:
-            q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
-                'data': traces,
-                'layout': go.Layout(
-                    xaxis={'title': 'Time', 'autorange': True},
-                    yaxis={'title': 'Frequency', 'autorange': True},
-                    autosize=True,
-                    showlegend=True, legend=dict(y=0.98),
-                    margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-            }])
+    if x_max is not None:
+        q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
+            'data': traces,
+            'layout': go.Layout(
+                xaxis={'title': 'Time', 'range': [range_d['x_min'], range_d['x_max']], 'autorange': range_d['xaxis_autorange']},
+                yaxis={'title': 'Frequency'},
+                autosize=range_d['auto_range'],
+                showlegend=True, legend=dict(y=0.98),
+                margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+        }])
+    else:
+        q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
+            'data': traces,
+            'layout': go.Layout(
+                xaxis={'title': 'Time', 'autorange': True},
+                yaxis={'title': 'Frequency', 'autorange': True},
+                autosize=True,
+                showlegend=True, legend=dict(y=0.98),
+                margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+        }])
 
 
 if __name__ == '__main__':
@@ -640,7 +569,6 @@ if __name__ == '__main__':
                   [dash.dependencies.Input('figure-data', 'children')])
     def clean_data(data):
         print("printing log...")
-        print(data)
         d = json.loads(data)
         signal_size = d[1]['signal_size']
         max_activity_value = d[3]['max_activity_value']
@@ -663,8 +591,6 @@ if __name__ == '__main__':
         if file_path is not None:
             print("saving data in hidden div...")
             path = sys.argv[1] + "\\" + file_path
-            print(path)
-            print("getting serial numbers...")
             h5 = tables.open_file(path, "r")
 
             serial_numbers = list(set([(x['serial_number']) for x in h5.root.resolution_m.data.iterrows()]))
@@ -696,8 +622,6 @@ if __name__ == '__main__':
     def update_serial_number_drop_down(intermediate_value):
         if intermediate_value:
             data = json.loads(intermediate_value)["serial_numbers"]
-            print("loaded serial numbers")
-            print(data)
             s_array = []
             for serial in data:
                 s_array.append({'label': str(serial), 'value': serial})
@@ -730,27 +654,29 @@ if __name__ == '__main__':
         dash.dependencies.Output('activity-graph', 'figure'),
         [dash.dependencies.Input('figure-data', 'children')])
     def update_figure(data):
-        print(data)
-        figure = json.loads(data)[7]
+        figure = json.loads(data)[10]
         result = {
             'data': figure['data'],
             'layout': go.Layout(figure['layout'])
         }
+        print(figure['layout'])
         return result
 
     @app.callback(
         dash.dependencies.Output('spectrogram-activity-graph', 'figure'),
-        [dash.dependencies.Input('serial-number-dropdown', 'value'),
-         dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children'),
+        [dash.dependencies.Input('figure-data', 'children'),
          dash.dependencies.Input('window-size-input', 'value'),
-         dash.dependencies.Input('transform-radio', 'value'),
-         dash.dependencies.Input('relayout-data', 'children')])
-    def update_figure(selected_serial_number, value, intermediate_value, window_size, radio, relayout_data):
-        p = Process(target=thread_spectrogram, args=(q_3, selected_serial_number, value, intermediate_value, window_size, radio, relayout_data,))
+         dash.dependencies.Input('transform-radio', 'value')])
+    def update_figure(data, window_size, radio):
+        j = json.loads(data)
+        activity = j[7]
+        time = j[8]
+        relayout = j[9]
+        p = Process(target=thread_spectrogram, args=(q_3, activity, time, window_size, radio, relayout,))
         p.start()
         result = q_3.get()
         p.join()
+        print(result[3]['layout'])
         return result[3]
 
     @app.callback(
