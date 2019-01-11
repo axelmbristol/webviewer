@@ -17,6 +17,7 @@ import plotly.graph_objs as go
 import tables
 from scipy import signal
 from dateutil.relativedelta import *
+import flask
 
 
 def get_date_range(layout_data):
@@ -418,9 +419,11 @@ if __name__ == '__main__':
 
     print('init dash...')
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
-    app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
-    server = app.server
+    server = flask.Flask(__name__)
+    app = dash.Dash(__name__, external_stylesheets=external_stylesheets, server=server)
+
+    # server = app.server
 
     styles = {
         'pre': {
