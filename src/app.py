@@ -198,7 +198,36 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
         q_1.put([])
 
 
-def build_activity_graph(data):
+def compare_dates(d1, d2):
+    d1_ = datetime.strptime(d1, '%d/%m/%Y').strftime('%Y-%m-%d')
+    d2_ = d2.split('T')[0]
+    return d1_ == d2_
+
+
+def build_famacha_trace(traces, data_f):
+    try:
+        print("famatcha data available for [%s]" % ','.join(data_f['famacha'].keys()))
+        time = traces[0]['x']
+        famacha_s = [None] * len(time)
+        serial = traces[0]['name']
+        for i, t in enumerate(time):
+            for key in data_f['famacha'][serial].keys():
+                if compare_dates(key, t):
+                    famacha_s[i] = data_f['famacha'][serial][key]
+
+        print(famacha_s)
+        return go.Scatter(
+            x=time,
+            y=famacha_s,
+            mode='lines+markers',
+            name='famacha for %s' % serial,
+            opacity=0.6
+        )
+    except KeyError as e:
+        print(e)
+
+
+def build_activity_graph(data, data_f):
     figures = []
     for d in data:
         x_max = d["x_max"]
@@ -213,6 +242,10 @@ def build_activity_graph(data):
         relayout_data = d["relayout_data"]
         traces = d["traces"]
         range_d = d["range_d"]
+
+        fig_famacha = build_famacha_trace(traces, data_f)
+        traces.append(fig_famacha)
+
         if x_max is not None:
             figures.append(
                 [{'thread_activity': True}, {'signal_size': signal_size}, {'min_activity_value': min_activity_value},
@@ -410,9 +443,12 @@ if __name__ == '__main__':
     q_2 = Queue()
     q_3 = Queue()
     con = False
-    files_in_data_directory = glob.glob("%s\*.h5" % sys.argv[1])
+    h5_files_in_data_directory = glob.glob("%s\*.h5" % sys.argv[1])
+    json_files_in_data_directory = glob.glob("%s\*.json" % sys.argv[2])
+    print(h5_files_in_data_directory)
+    print(json_files_in_data_directory)
     farm_array = []
-    for s in files_in_data_directory:
+    for s in h5_files_in_data_directory:
         split = s.split("\\")
         farm_name = split[len(split) - 1]
         farm_array.append({'label': str(farm_name), 'value': farm_name})
@@ -653,7 +689,16 @@ if __name__ == '__main__':
             # data = {'serial_numbers': sorted_serial_numbers, 'data_m': data_m, 'data_w': data_w, 'data_d': data_d,
             #         'data_h': data_h, 'data_h_h': data_h_h, 'data_f': data_f}
             # return json.dumps(data)
-            data = {'serial_numbers': sorted_serial_numbers, 'file_path': path}
+
+            # get famacha score data
+            f_id = file_path.split('.')[0]
+            path_json = sys.argv[2] + "\\" + f_id +".json"
+            with open(path_json) as f:
+                famacha_data = json.load(f)
+
+            print("famatcha data available for [%s]" % ','.join(famacha_data.keys()))
+
+            data = {'serial_numbers': sorted_serial_numbers, 'file_path': path, 'famacha': famacha_data}
             return json.dumps(data)
 
 
@@ -697,12 +742,18 @@ if __name__ == '__main__':
 
     @app.callback(
         dash.dependencies.Output('activity-graph', 'figure'),
-        [dash.dependencies.Input('figure-data', 'children')])
-    def update_figure(data):
+        [dash.dependencies.Input('intermediate-value', 'children'),
+         dash.dependencies.Input('figure-data', 'children')])
+    def update_figure(data_f, data):
         _d = []
         if data is not None:
             _d = json.loads(data)
-        figures = build_activity_graph(_d)
+        _d_f = []
+        if data_f is not None:
+            _d_f = json.loads(data_f)
+
+        figures = build_activity_graph(_d, _d_f)
+
         result = {}
         for f in figures:
             result = {
