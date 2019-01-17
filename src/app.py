@@ -3,7 +3,7 @@ import glob
 import json
 import operator
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from multiprocessing import Process, Queue
 from time import mktime
 from time import strptime
@@ -17,6 +17,7 @@ import plotly.graph_objs as go
 import tables
 from scipy import signal
 from dateutil.relativedelta import *
+from ipython_genutils.py3compat import xrange
 import flask
 
 
@@ -90,10 +91,12 @@ def find_appropriate_resolution(duration):
         value = 4
     if 259200.0 < duration <= 604800.0:
         value = 3
-    if 604800.0 < duration <= 3 * 604800.0:
+    if 604800.0 < duration <= 5 * 604800.0:
         value = 2
-    if duration > 3 * 604800.0:
-        value = 2
+    if 5 * 604800.0 < duration <= 10 * 604800.0:
+        value = 1
+    if duration > 10 * 604800.0:
+        value = 1
     return value
 
 
@@ -175,6 +178,10 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                 end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
                 time_range = get_elapsed_time_string(d1, d2)
 
+                if value == 2:
+                    time = [ t.split('T')[0] for t in time]
+
+                print(52, time)
                 traces.append(go.Bar(
                     x=time,
                     y=activity,
@@ -192,7 +199,8 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                            "time_range": time_range,
                            "traces": traces,
                            "x_max": x_max,
-                           "relayout_data": relayout_data})
+                           "relayout_data": relayout_data,
+                           'resolution': value})
                 q_1.put(_d)
     if q_1.empty():
         q_1.put([])
@@ -201,26 +209,60 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
 def compare_dates(d1, d2):
     d1_ = datetime.strptime(d1, '%d/%m/%Y').strftime('%Y-%m-%d')
     d2_ = d2.split('T')[0]
+    print(d1_, d2_, d1_ == d2_)
     return d1_ == d2_
 
 
-def build_famacha_trace(traces, data_f):
+def chunks(l, n):
+    n = max(1, n)
+    return (l[i:i+n] for i in xrange(0, len(l), n))
+
+
+def is_in_period(start, famacha_day, n):
+    datetime_start = datetime.strptime(start, '%Y-%m-%d')
+    datetime_famacha = datetime.strptime(famacha_day, '%d/%m/%Y')
+    margin = timedelta(days=n)
+    return datetime_start - margin <= datetime_famacha <= datetime_start + margin
+
+
+def build_famacha_trace(traces, data_f, resolution):
     try:
         print("famatcha data available for [%s]" % ','.join(data_f['famacha'].keys()))
         time = traces[0]['x']
+        m = pow(10, int(len(str(max(traces[0]['y'])).split('.')[0])/1.3))
         famacha_s = [None] * len(time)
         serial = traces[0]['name']
+        date_ = data_f['famacha'][serial].keys()
+        date_famacha = [datetime.strptime(d, '%d/%m/%Y').strftime('%Y-%m-%d') for d in date_]
+
+        # # get interval of time
+        # chunked = chunks(time, 2)
+        # for i, item in enumerate(chunked):
+        # #check if time in period
+        #     for day in date_famacha:
+        #         if is_in_period(day, item[0], item[1]):
+        #             key = datetime.strptime(day, '%Y-%m-%d').strftime('%d/%m/%Y')
+        #             famacha_s[i] = data_f['famacha'][serial][key]
+        print("resolution=%d", resolution)
         for i, t in enumerate(time):
-            for key in data_f['famacha'][serial].keys():
-                if compare_dates(key, t):
-                    famacha_s[i] = data_f['famacha'][serial][key]
+            day = t.split('T')[0]
+            if resolution == 1:
+                for day_in_famacha in date_famacha:
+                    key = datetime.strptime(day_in_famacha, '%Y-%m-%d').strftime('%d/%m/%Y')
+                    if is_in_period(day, key, 5):
+                        famacha_s[i] = data_f['famacha'][serial][key]*m
+            else:
+                if day in date_famacha:
+                    key = datetime.strptime(day, '%Y-%m-%d').strftime('%d/%m/%Y')
+                    famacha_s[i] = data_f['famacha'][serial][key]*m
 
         print(famacha_s)
         return go.Scatter(
             x=time,
             y=famacha_s,
             mode='lines+markers',
-            name='famacha for %s' % serial,
+            name='famacha score',
+            connectgaps=True,
             opacity=0.6
         )
     except KeyError as e:
@@ -242,8 +284,9 @@ def build_activity_graph(data, data_f):
         relayout_data = d["relayout_data"]
         traces = d["traces"]
         range_d = d["range_d"]
+        resolution = d["resolution"]
 
-        fig_famacha = build_famacha_trace(traces, data_f)
+        fig_famacha = build_famacha_trace(traces, data_f, resolution)
         traces.append(fig_famacha)
 
         if x_max is not None:
@@ -370,7 +413,8 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
                                 yaxis={'title': 'RSSI(received signal strength in)'},
                                 autosize=range_d['auto_range'],
                                 showlegend=True,
-                                legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+                                legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40)),
+            'resolution': value
         })
     else:
         q_2.put({
@@ -380,7 +424,8 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
                                                                                    'autorange': True},
                                 autosize=True,
                                 showlegend=True,
-                                legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+                                legend=dict(y=1, x=0), margin=go.layout.Margin(l=60, r=50, t=5, b=40)),
+            'resolution': value
         })
 
 
@@ -500,7 +545,7 @@ if __name__ == '__main__':
                 dcc.Dropdown(
                     id='serial-number-dropdown',
                     options=[],
-                    multi=True,
+                    multi=False,
                     placeholder="Select animal...",
                     style={'width': '47vh', 'margin-bottom': '2vh'}
                     # value=40121100718
@@ -707,10 +752,15 @@ if __name__ == '__main__':
         [dash.dependencies.Input('intermediate-value', 'children')])
     def update_serial_number_drop_down(intermediate_value):
         if intermediate_value:
-            data = json.loads(intermediate_value)["serial_numbers"]
+            l = json.loads(intermediate_value)
+            data = l["serial_numbers"]
+            famacha = list(map(int, l['famacha'].keys()))
             s_array = []
             for serial in data:
-                s_array.append({'label': str(serial), 'value': serial})
+                if serial in famacha:
+                    s_array.append({'label': "%s (famacha data available)" % str(serial), 'value': serial})
+                else:
+                    s_array.append({'label': str(serial), 'value': serial})
             return s_array
         else:
             return [{}]
