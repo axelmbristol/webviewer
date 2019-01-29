@@ -225,10 +225,9 @@ def is_in_period(start, famacha_day, n):
     return datetime_start - margin <= datetime_famacha <= datetime_start + margin
 
 
-def build_weather_trace(traces, data_f, resolution):
+def build_weather_trace(time, data_f):
     try:
         print("weather data available for [%s]" % ','.join(data_f['weather'].keys()))
-        time = traces[0]['x']
         # m = pow(10, int(len(str(max(traces[0]['y'])).split('.')[0])/1.3))
         weather_s = [None] * len(time)
         date_weather = data_f['weather'].keys()
@@ -242,7 +241,7 @@ def build_weather_trace(traces, data_f, resolution):
         #         if is_in_period(day, item[0], item[1]):
         #             key = datetime.strptime(day, '%Y-%m-%d').strftime('%d/%m/%Y')
         #             famacha_s[i] = data_f['famacha'][serial][key]
-        print("resolution=%d", resolution)
+        # print("resolution=%d", resolution)
         for i, t in enumerate(time):
             day = t.split('T')[0]
             try:
@@ -252,9 +251,12 @@ def build_weather_trace(traces, data_f, resolution):
                 print(e)
             if day in date_weather:
                 list = data_f['weather'][day]
+                mean = 0
                 for item in list:
-                    if h == item['time'].split(':')[0]:
-                        weather_s[i] = item['humidity']
+                    mean += int(item['humidity'])
+                    # if h == item['time'].split(':')[0]:
+                    #     weather_s[i] = item['humidity']
+                weather_s[i] = mean/len(list)
 
         print(weather_s)
         return go.Scatter(
@@ -262,8 +264,8 @@ def build_weather_trace(traces, data_f, resolution):
             y=weather_s,
             name='humidity',
             # connectgaps=True,
-            opacity=0.1,
-            yaxis='y3',
+            opacity=0.01,
+            yaxis='y2',
             fill='tozeroy',
             mode='none'
             # marker=dict(
@@ -340,13 +342,13 @@ def build_activity_graph(data, data_f):
         resolution = d["resolution"]
 
         fig_famacha = build_famacha_trace(traces, data_f, resolution)
-        fig_weather = build_weather_trace(traces, data_f, resolution)
+        # fig_weather = build_weather_trace(traces, data_f, resolution)
 
         traces.append(fig_famacha)
-        if resolution == 1:
-            traces.append(fig_weather)
-        # traces.append(fig_weather)
-        print(traces)
+        # if resolution == 1:
+        #     traces.append(fig_weather)
+        # # traces.append(fig_weather)
+        # print(traces)
 
         if x_max is not None:
             figures.append(
@@ -391,7 +393,7 @@ def build_activity_graph(data, data_f):
                  {'end_date': end_date}, {'time_range': time_range},
                  {'activity': activity}, {'time': time}, {'relayout_data': relayout_data}, {
                      'data': traces,
-                     'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True},
+                     'layout': go.Layout(xaxis={'autorange': True},
                                          yaxis={'title': 'Activity level/Accelerometer count',
                                                 'autorange': True},
                                          autosize=True,
@@ -404,22 +406,22 @@ def build_activity_graph(data, data_f):
                                              # tickfont=dict(
                                              #     color='rgb(148, 103, 189)'
                                              # ),
-                                             anchor='x',
-                                             overlaying='y',
-                                             side='right'
-                                         ),
-                                         yaxis3=dict(
-                                             # title='HUMIDITY',
-                                             # titlefont=dict(
-                                             #     color='rgb(148, 103, 189)'
-                                             # ),
-                                             # tickfont=dict(
-                                             #     color='rgb(148, 103, 189)'
-                                             # ),
-                                             anchor='x',
                                              overlaying='y',
                                              side='right'
                                          )
+                                         # ,
+                                         # yaxis3=dict(
+                                         #     # title='HUMIDITY',
+                                         #     # titlefont=dict(
+                                         #     #     color='rgb(148, 103, 189)'
+                                         #     # ),
+                                         #     # tickfont=dict(
+                                         #     #     color='rgb(148, 103, 189)'
+                                         #     # ),
+                                         #     anchor='x',
+                                         #     overlaying='y',
+                                         #     side='right'
+                                         # )
                                          # ,
                                          # shapes=[dict(
                                          #     type='rect',
@@ -497,6 +499,8 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
             # h5.close()
 
             time = [(x[0]) for x in data]
+            fig_weather = build_weather_trace(time, raw)
+            traces.append(fig_weather)
 
             if value is not 5:
                 signal_strength_min = [(x[2]) for x in data]
@@ -534,6 +538,12 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
             'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'],
                                        'range': [range_d['x_min'], range_d['x_max']]},
                                 yaxis={'title': 'RSSI(received signal strength in)'},
+                                yaxis2=dict(
+                                    anchor='x',
+                                    overlaying='y',
+                                    side='right',
+                                    title='Humidity'
+                                ),
                                 autosize=range_d['auto_range'],
                                 showlegend=False,
                                 # legend=dict(y=1, x=0),
@@ -547,6 +557,12 @@ def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayo
             'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
                                                                                             'strength in)',
                                                                                    'autorange': True},
+                                yaxis2=dict(
+                                    anchor='x',
+                                    overlaying='y',
+                                    side='right',
+                                    title='Humidity'
+                                ),
                                 autosize=True,
                                 showlegend=False,
                                 # legend=dict(y=1, x=0),
@@ -589,7 +605,7 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
         q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
             'data': traces,
             'layout': go.Layout(
-                xaxis={'title': 'Time', 'range': [range_d['x_min'], range_d['x_max']],
+                xaxis={'range': [range_d['x_min'], range_d['x_max']],
                        'autorange': range_d['xaxis_autorange']},
                 yaxis={'title': 'Frequency'},
                 autosize=range_d['auto_range'],
@@ -600,7 +616,7 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
         q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
             'data': traces,
             'layout': go.Layout(
-                xaxis={'title': 'Time', 'autorange': True},
+                xaxis={'autorange': True},
                 yaxis={'title': 'Frequency', 'autorange': True},
                 autosize=True,
                 showlegend=True, legend=dict(y=0.98),
@@ -809,10 +825,19 @@ if __name__ == '__main__':
 
 
     @app.callback(dash.dependencies.Output('log-div', 'children'),
-                  [dash.dependencies.Input('figure-data', 'children')])
-    def clean_data(data):
+                  [dash.dependencies.Input('figure-data', 'children'),
+                   dash.dependencies.Input('serial-number-dropdown', 'options'),
+                   dash.dependencies.Input('farm-dropdown', 'value')])
+    def clean_data(data, serial, farm):
         print("printing log...")
+        print(farm)
+        j = json.dumps(serial)
+        print(j)
+        individual_with_famacha_data = str(j).count('(famacha data available)')
+
+        print(individual_with_famacha_data)
         d = []
+
         if data is not None:
             d = json.loads(data)
         for i in d:
@@ -829,6 +854,11 @@ if __name__ == '__main__':
                 html.P("Start date: %s" % start_date),
                 html.P("End date: %s" % end_date),
                 html.P("Time range: %s" % time_range)
+            ])
+
+        if not d and farm is not None:
+            return html.Div([
+                html.P("Individual with famacha data available: %s" % individual_with_famacha_data)
             ])
 
 
@@ -865,8 +895,13 @@ if __name__ == '__main__':
             # get famacha score data
             f_id = file_path.split('.')[0]
             path_json = sys.argv[2] + "\\" + f_id + ".json"
-            with open(path_json) as f:
-                famacha_data = json.load(f)
+            famacha_data = None
+
+            try:
+                with open(path_json) as f:
+                    famacha_data = json.load(f)
+            except FileNotFoundError as e:
+                print(e)
 
             path_json_weather = sys.argv[2] + "\\" + f_id.split('_')[0] + "_weather.json"
             with open(path_json_weather) as f_w:
