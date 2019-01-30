@@ -278,7 +278,6 @@ def build_weather_trace(time, data_f):
 
 def build_famacha_trace(traces, data_f, resolution):
     try:
-        print("famatcha data available for [%s]" % ','.join(data_f['famacha'].keys()))
         time = traces[0]['x']
         # m = pow(10, int(len(str(max(traces[0]['y'])).split('.')[0])/1.3))
         famacha_s = [None] * len(time)
@@ -896,7 +895,7 @@ if __name__ == '__main__':
             # get famacha score data
             f_id = file_path.split('.')[0]
             path_json = sys.argv[2] + "\\" + f_id + ".json"
-            famacha_data = []
+            famacha_data = {}
 
             try:
                 with open(path_json) as f:
@@ -905,10 +904,12 @@ if __name__ == '__main__':
                 print(e)
 
             path_json_weather = sys.argv[2] + "\\" + f_id.split('_')[0] + "_weather.json"
-            with open(path_json_weather) as f_w:
-                weather_data = json.load(f_w)
-
-            print("famatcha data available for [%s]" % ','.join(famacha_data.keys()))
+            weather_data = {}
+            try:
+                with open(path_json_weather) as f_w:
+                    weather_data = json.load(f_w)
+            except FileNotFoundError as e:
+                print(e)
 
             data = {'serial_numbers': sorted_serial_numbers, 'file_path': path, 'famacha': famacha_data, 'weather': weather_data}
             return json.dumps(data)
@@ -921,7 +922,9 @@ if __name__ == '__main__':
         if intermediate_value:
             l = json.loads(intermediate_value)
             data = l["serial_numbers"]
-            famacha = list(map(int, l['famacha'].keys()))
+            keys = l['famacha'].keys()
+            print(keys)
+            famacha = list(map(int, keys))
             s_array = []
             for serial in data:
                 if serial in famacha:
