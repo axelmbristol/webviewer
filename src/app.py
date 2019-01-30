@@ -344,7 +344,8 @@ def build_activity_graph(data, data_f):
         fig_famacha = build_famacha_trace(traces, data_f, resolution)
         # fig_weather = build_weather_trace(traces, data_f, resolution)
 
-        traces.append(fig_famacha)
+        if fig_famacha is not None:
+            traces.append(fig_famacha)
         # if resolution == 1:
         #     traces.append(fig_weather)
         # # traces.append(fig_weather)
@@ -895,7 +896,7 @@ if __name__ == '__main__':
             # get famacha score data
             f_id = file_path.split('.')[0]
             path_json = sys.argv[2] + "\\" + f_id + ".json"
-            famacha_data = None
+            famacha_data = []
 
             try:
                 with open(path_json) as f:
