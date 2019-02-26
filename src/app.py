@@ -20,6 +20,10 @@ from scipy import signal
 from dateutil.relativedelta import *
 from ipython_genutils.py3compat import xrange
 import flask
+from itertools import groupby
+import plotly.figure_factory as ff
+import plotly.plotly as py
+
 global sql_db
 
 
@@ -29,11 +33,11 @@ def get_date_range(layout_data):
     x_max_epoch = 19352963810.0
     try:
         xaxis_autorange = bool(layout_data["xaxis.autorange"])
-    except KeyError:
+    except (KeyError, TypeError):
         xaxis_autorange = False
     try:
         auto_range = layout_data["autosize"]
-    except KeyError:
+    except (KeyError, TypeError):
         auto_range = False
     try:
         x_min = str(layout_data["xaxis.range[0]"])
@@ -42,7 +46,7 @@ def get_date_range(layout_data):
         if "." not in x_min:
             x_min = x_min + ".00"
         x_min_epoch = int(mktime(strptime(x_min, '%Y-%m-%d %H:%M:%S.%f')))
-    except KeyError:
+    except (KeyError, TypeError):
         x_min = None
     try:
         x_max = str(layout_data["xaxis.range[1]"])
@@ -51,7 +55,7 @@ def get_date_range(layout_data):
         if "." not in x_max:
             x_max = x_max + ".00"
         x_max_epoch = int(mktime(strptime(x_max, '%Y-%m-%d %H:%M:%S.%f')))
-    except KeyError:
+    except (KeyError, TypeError):
         x_max = None
     return {'x_min_epoch': x_min_epoch, 'x_max_epoch': x_max_epoch,
             'x_min': x_min, 'x_max': x_max,
@@ -88,9 +92,9 @@ def find_appropriate_resolution(duration):
     if 0 < duration <= 3 * 3600.0:
         value = 5
     if 3 * 3600.0 < duration <= 4 * 3600.0:
-        value = 4
+        value = 5
     if 4 * 3600.0 < duration <= 259200.0:
-        value = 4
+        value = 3
     if 259200.0 < duration <= 604800.0:
         value = 3
     if 604800.0 < duration <= 5 * 604800.0:
@@ -100,7 +104,6 @@ def find_appropriate_resolution(duration):
     if duration > 10 * 604800.0:
         value = 1
     return value
-
 
 
 def compare_dates(d1, d2):
@@ -142,7 +145,7 @@ def build_weather_trace(time, data_f):
                     mean += int(item['humidity'])
                     # if h == item['time'].split(':')[0]:
                     #     weather_s[i] = item['humidity']
-                weather_s[i] = mean/len(list)
+                weather_s[i] = mean / len(list)
 
         print(weather_s)
         return go.Scatter(
@@ -201,7 +204,7 @@ def build_famacha_trace(traces, data_f, resolution):
             #     color='rgb(153,0,255)'
             # ),
         )
-    except KeyError as e:
+    except (KeyError, TypeError) as e:
         print(e)
 
 
@@ -289,6 +292,160 @@ def build_activity_graph(data, data_f):
     return figures
 
 
+def pad(l, size, padding):
+    return l + [padding] * abs((len(l)-size))
+
+
+def get_resolution_string(value):
+    result = 'resolution_m'
+    if value == 0:
+        result = 'resolution_m'
+    if value == 1:
+        result = 'resolution_w'
+    if value == 2:
+        result = 'resolution_d'
+    if value == 3:
+        result = 'resolution_h'
+    if value == 4:
+        result = 'resolution_min'
+    if value == 5:
+        result = 'resolution_min'
+    return result
+
+
+def thread_activity_herd(q_4, value, intermediate_value, relayout_data):
+
+    serial_numbers = []
+
+    try:
+        serial_numbers = json.loads(intermediate_value)['serial_numbers']
+    except TypeError as e:
+        print(e)
+
+    _d = []
+
+    # print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
+    # print("1 value is %d" % value)
+    timestamp_queried = False
+
+    data = None
+    range_d = get_date_range(json.loads(relayout_data))
+    x_max_epoch = range_d['x_max_epoch']
+    x_min_epoch = range_d['x_min_epoch']
+    x_max = range_d['x_max']
+    if range_d['x_max'] is not None:
+        value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
+
+    resolution_string = get_resolution_string(value)
+
+    if intermediate_value is not None:
+        raw = json.loads(intermediate_value)
+
+        file_path = raw["file_path"]
+        farm_id = raw["farm_id"]
+
+        if sys.argv[3] == 'h5':
+            print("opening file in thread test")
+            h5 = tables.open_file(file_path, "r")
+
+
+        if sys.argv[3] == 'h5':
+            data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                     x['first_sensor_value'])
+                    for x in h5.root.resolution_m.data if x_min_epoch < x['timestamp'] < x_max_epoch]
+
+        if sys.argv[3] == 'sql':
+            rows = execute_sql_query(
+                "SELECT timestamp_s, first_sensor_value, serial_number FROM %s_%s WHERE timestamp BETWEEN %s AND %s" %
+                (farm_id, resolution_string, x_min_epoch, x_max_epoch))
+            data = [(x['timestamp_s'], x['first_sensor_value'], x['serial_number']) for x in rows]
+
+    activity_list = []
+    time = None
+    max = 0
+
+    data_list = []
+
+    if data is not None:
+        data_list = [list(v) for l, v in groupby(sorted(data, key=lambda x: x[2]), lambda x: x[2])]
+
+    records = []
+    for item in data_list:
+        serial = item[0][2]
+        a = [(x[1]) for x in item]
+        if len(a) < 3:
+            continue
+        if len(a) > max:
+            max = len(a)
+            time = [(x[0]) for x in item]
+        records.append((a, serial))
+
+    ids = []
+    for i in records:
+        a = pad(i[0], max, 0)
+        ids.append(i[1])
+        activity_list.append(a)
+
+    print("activity level-->resolution=%d" % value)
+
+    # print(activity_list)
+    print(time)
+
+    if len(activity_list) > 0:
+        traces = []
+        signal_size = len(activity_list[0])
+        max_activity_value = 0
+        min_activity_value = 0
+        s_d = time[0]
+        e_d = time[len(time) - 1]
+        d1 = (datetime.strptime(s_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+        d2 = (datetime.strptime(e_d, '%Y-%m-%dT%H:%M') - datetime(1970, 1, 1)).total_seconds()
+        start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
+        end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
+        time_range = get_elapsed_time_string(d1, d2)
+        if value == 2:
+            time = [t.split('T')[0] for t in time]
+
+        serials = [".."+str(v)[5:] for v in ids]
+
+        # annotations = [[str(j) for j in i] for i in activity_list]
+        # trace = ff.create_annotated_heatmap(z=activity_list, x=time, y=serials, annotation_text=annotations)
+        # plotly.offline.init_notebook_mode(connected=True)
+        # plotly.offline.iplot(trace, filename='annotated_heatmap_numpy')
+
+        trace = go.Heatmap(z=activity_list,
+                           x=time,
+                           y=serials,
+                           colorscale='Viridis')
+
+
+        traces.append(trace)
+
+        # trace = go.Heatmap(z=[[1, 20, 30, 50, 1], [20, 1, 60, 80, 30], [30, 60, 1, -10, 20]],
+        #                    x=['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+        #                    y=['Morning', 'Afternoon', 'Evening'])
+
+        # traces.append(trace)
+
+        _d.append({"activity": activity_list[0],
+                   "time": time,
+                   "range_d": range_d,
+                   "start_date": start_date,
+                   "end_date": end_date,
+                   "signal_size": signal_size,
+                   "min_activity_value": min_activity_value,
+                   "max_activity_value": max_activity_value,
+                   "time_range": time_range,
+                   "traces": traces,
+                   "x_max": x_max,
+                   "relayout_data": relayout_data,
+                   'resolution': value})
+        q_4.put(_d)
+
+    if q_4.empty():
+        q_4.put([])
+
+
 def thread_activity(q_1, selected_serial_number, value, intermediate_value, relayout_data):
     input_ag = []
     _d = []
@@ -304,6 +461,7 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
         # print("1 value is %d" % value)
         for i in input_ag:
             data = None
+            print("5252", relayout_data)
             range_d = get_date_range(json.loads(relayout_data))
             x_max_epoch = range_d['x_max_epoch']
             x_min_epoch = range_d['x_min_epoch']
@@ -330,7 +488,9 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                     rows = execute_sql_query(
                         "SELECT timestamp, first_sensor_value FROM %s_resolution_m WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
                         (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value']) for x in rows]
+                    data = [
+                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'])
+                        for x in rows]
 
             if value == 1:
                 if sys.argv[3] == 'h5':
@@ -353,8 +513,8 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                             x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
                 if sys.argv[3] == 'sql':
                     rows = execute_sql_query(
-                            "SELECT timestamp, first_sensor_value FROM %s_resolution_d WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                            (farm_id, i, x_min_epoch, x_max_epoch))
+                        "SELECT timestamp, first_sensor_value FROM %s_resolution_d WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                        (farm_id, i, x_min_epoch, x_max_epoch))
                     data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
                              x['first_sensor_value'])
                             for x in rows]
@@ -388,11 +548,11 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                 if sys.argv[3] == 'h5':
                     data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
                              x['first_sensor_value'])
-                            for x in h5.root.resolution_f.data if
+                            for x in h5.root.resolution_min.data if
                             x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
                 if sys.argv[3] == 'sql':
                     rows = execute_sql_query(
-                        "SELECT timestamp, first_sensor_value FROM %s_resolution_f WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                        "SELECT timestamp, first_sensor_value FROM %s_resolution_min WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
                         (farm_id, i, x_min_epoch, x_max_epoch))
                     data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
                              x['first_sensor_value'])
@@ -446,186 +606,195 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
 
 
 def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayout_data):
-    input_ss = []
-    x_max = None
-    if isinstance(selected_serial_number, list):
-        input_ss.extend(selected_serial_number)
-    else:
-        input_ss.append(selected_serial_number)
-    traces = []
-    if not selected_serial_number:
-        print("2 selected_serial_number empty")
-    else:
-        for i in input_ss:
-            data = None
-            range_d = get_date_range(json.loads(relayout_data))
-            x_max_epoch = range_d['x_max_epoch']
-            x_min_epoch = range_d['x_min_epoch']
-            if range_d['x_max'] is not None:
-                value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
+    try:
+        input_ss = []
+        x_max = None
+        if isinstance(selected_serial_number, list):
+            input_ss.extend(selected_serial_number)
+        else:
+            input_ss.append(selected_serial_number)
+        traces = []
+        if not selected_serial_number:
+            print("2 selected_serial_number empty")
+        else:
+            for i in input_ss:
+                data = None
+                range_d = get_date_range(json.loads(relayout_data))
+                x_max_epoch = range_d['x_max_epoch']
+                x_min_epoch = range_d['x_min_epoch']
+                if range_d['x_max'] is not None:
+                    value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
 
-            raw = json.loads(intermediate_value)
-            file_path = raw["file_path"]
-            farm_id = raw["farm_id"]
-            if sys.argv[3] == 'h5':
-                print("opening file in thread signal")
-                h5 = tables.open_file(file_path, "r")
+                raw = json.loads(intermediate_value)
 
-            if value == 0:
+                file_path = raw["file_path"]
+                farm_id = raw["farm_id"]
                 if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                    print("opening file in thread signal")
+                    h5 = tables.open_file(file_path, "r")
+
+                if value == 0:
+                    if sys.argv[3] == 'h5':
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['signal_strength_max'], x['signal_strength_min'])
+                                for x in h5.root.resolution_m.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if sys.argv[3] == 'sql':
+                        rows = execute_sql_query(
+                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_m WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                            (farm_id, i, x_min_epoch, x_max_epoch))
+                        data = [
+                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
                              x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_m.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_m WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength_max'], x['signal_strength_min'])
-                        for x in rows]
-            if value == 1:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_w.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_w WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength_max'],
-                         x['signal_strength_min'])
-                        for x in rows]
-            if value == 2:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_d.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_d WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength_max'],
-                         x['signal_strength_min'])
-                        for x in rows]
-            if value == 3:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength_max'],
-                         x['signal_strength_min'])
-                        for x in rows]
-            if value == 4:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in h5.root.resolution_h_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_h_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength_max'],
-                         x['signal_strength_min'])
-                        for x in rows]
-            if value == 5:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength'])
-                            for x in h5.root.resolution_f.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, signal_strength FROM %s_resolution_f WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength'])
-                        for x in rows]
+                            for x in rows]
+                if value == 1:
+                    if sys.argv[3] == 'h5':
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['signal_strength_max'], x['signal_strength_min'])
+                                for x in h5.root.resolution_w.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if sys.argv[3] == 'sql':
+                        rows = execute_sql_query(
+                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_w WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                            (farm_id, i, x_min_epoch, x_max_epoch))
+                        data = [
+                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'],
+                             x['signal_strength_min'])
+                            for x in rows]
+                if value == 2:
+                    if sys.argv[3] == 'h5':
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['signal_strength_max'], x['signal_strength_min'])
+                                for x in h5.root.resolution_d.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if sys.argv[3] == 'sql':
+                        rows = execute_sql_query(
+                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_d WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                            (farm_id, i, x_min_epoch, x_max_epoch))
+                        data = [
+                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'],
+                             x['signal_strength_min'])
+                            for x in rows]
+                if value == 3:
+                    if sys.argv[3] == 'h5':
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['signal_strength_max'], x['signal_strength_min'])
+                                for x in h5.root.resolution_h.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if sys.argv[3] == 'sql':
+                        rows = execute_sql_query(
+                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                            (farm_id, i, x_min_epoch, x_max_epoch))
+                        data = [
+                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'],
+                             x['signal_strength_min'])
+                            for x in rows]
+                if value == 4:
+                    if sys.argv[3] == 'h5':
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['signal_strength_max'], x['signal_strength_min'])
+                                for x in h5.root.resolution_h_h.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if sys.argv[3] == 'sql':
+                        rows = execute_sql_query(
+                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_h_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                            (farm_id, i, x_min_epoch, x_max_epoch))
+                        data = [
+                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                             x['signal_strength_max'],
+                             x['signal_strength_min'])
+                            for x in rows]
+                if value == 5:
+                    if sys.argv[3] == 'h5':
+                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                                 x['signal_strength'])
+                                for x in h5.root.resolution_min.data if
+                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+                    if sys.argv[3] == 'sql':
+                        rows = execute_sql_query(
+                            "SELECT timestamp, signal_strength FROM %s_resolution_min WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                            (farm_id, i, x_min_epoch, x_max_epoch))
+                        data = [
+                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength'])
+                            for x in rows]
 
-            time = [(x[0]) for x in data]
-            fig_weather = build_weather_trace(time, raw)
-            traces.append(fig_weather)
+                time = [(x[0]) for x in data]
+                fig_weather = build_weather_trace(time, raw)
+                traces.append(fig_weather)
 
-            if value is not 5:
-                signal_strength_min = [(x[2]) for x in data]
-                signal_strength_max = [(x[1]) for x in data]
-                print("thread_signal resolution=%d" % value)
-                if signal_strength_min is not None:
-                    traces.append(go.Scatter(
-                        x=time,
-                        y=signal_strength_min,
-                        mode='lines+markers',
-                        name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
+                if value is not 5:
+                    signal_strength_min = [(x[2]) for x in data]
+                    signal_strength_max = [(x[1]) for x in data]
+                    print("thread_signal resolution=%d" % value)
+                    if signal_strength_min is not None:
+                        traces.append(go.Scatter(
+                            x=time,
+                            y=signal_strength_min,
+                            mode='lines+markers',
+                            name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
 
-                    ))
-                if signal_strength_max is not None:
-                    traces.append(go.Scatter(
-                        x=time,
-                        y=signal_strength_max,
-                        mode='lines+markers',
-                        name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
-                    ))
-            else:
-                signal_strength_ = [(x[1]) for x in data]
-                if signal_strength_ is not None:
-                    traces.append(go.Scatter(
-                        x=time,
-                        y=signal_strength_,
-                        mode='lines+markers',
-                        name=("signal strength%d" % i) if (len(input_ss) > 1) else "signal strength"
+                        ))
+                    if signal_strength_max is not None:
+                        traces.append(go.Scatter(
+                            x=time,
+                            y=signal_strength_max,
+                            mode='lines+markers',
+                            name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
+                        ))
+                else:
+                    signal_strength_ = [(x[1]) for x in data]
+                    if signal_strength_ is not None:
+                        traces.append(go.Scatter(
+                            x=time,
+                            y=signal_strength_,
+                            mode='lines+markers',
+                            name=("signal strength%d" % i) if (len(input_ss) > 1) else "signal strength"
 
-                    ))
+                        ))
 
-    if x_max is not None:
-        q_2.put({
-            'data': traces,
-            'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'],
-                                       'range': [range_d['x_min'], range_d['x_max']]},
-                                yaxis={'title': 'RSSI(received signal strength in)'},
-                                yaxis2=dict(
-                                    anchor='x',
-                                    overlaying='y',
-                                    side='right',
-                                    title='Humidity'
-                                ),
-                                autosize=range_d['auto_range'],
-                                showlegend=False,
-                                # legend=dict(y=1, x=0),
-                                margin=go.layout.Margin(l=60, r=50, t=5, b=40)
-                                ),
-            'resolution': value
-        })
-    else:
-        q_2.put({
-            'data': traces,
-            'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
-                                                                                            'strength in)',
-                                                                                   'autorange': True},
-                                yaxis2=dict(
-                                    anchor='x',
-                                    overlaying='y',
-                                    side='right',
-                                    title='Humidity'
-                                ),
-                                autosize=True,
-                                showlegend=False,
-                                # legend=dict(y=1, x=0),
-                                margin=go.layout.Margin(l=60, r=50, t=5, b=40)
-                                ),
-            'resolution': value
-        })
+        if x_max is not None:
+            q_2.put({
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'],
+                                           'range': [range_d['x_min'], range_d['x_max']]},
+                                    yaxis={'title': 'RSSI(received signal strength in)'},
+                                    yaxis2=dict(
+                                        anchor='x',
+                                        overlaying='y',
+                                        side='right',
+                                        title='Humidity'
+                                    ),
+                                    autosize=range_d['auto_range'],
+                                    showlegend=False,
+                                    # legend=dict(y=1, x=0),
+                                    margin=go.layout.Margin(l=60, r=50, t=5, b=40)
+                                    ),
+                'resolution': value
+            })
+        else:
+            q_2.put({
+                'data': traces,
+                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
+                                                                                                'strength in)',
+                                                                                       'autorange': True},
+                                    yaxis2=dict(
+                                        anchor='x',
+                                        overlaying='y',
+                                        side='right',
+                                        title='Humidity'
+                                    ),
+                                    autosize=True,
+                                    showlegend=False,
+                                    # legend=dict(y=1, x=0),
+                                    margin=go.layout.Margin(l=60, r=50, t=5, b=40)
+                                    ),
+                'resolution': value
+            })
+    except TypeError as e:
+        print(e)
 
 
 def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
@@ -636,7 +805,7 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
     x_max = range_d['x_max']
     traces = []
     # print("activity in spec", activity)
-    if len(activity) > 1:
+    if len(activity) > 1 and None not in activity:
         if activity is not None and window_size is not None:
             if int(window_size) > len(activity):
                 window_size = int(len(activity))
@@ -680,7 +849,8 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
         }])
 
 
-def connect_to_sql_database(db_server_name="localhost", db_user="axel", db_password="Mojjo@2015", db_name="south_africa",
+def connect_to_sql_database(db_server_name="localhost", db_user="axel", db_password="Mojjo@2015",
+                            db_name="south_africa_test5",
                             char_set="utf8mb4", cusror_type=pymysql.cursors.DictCursor):
     # print("connecting to db %s..." % db_name)
     global sql_db
@@ -715,6 +885,7 @@ if __name__ == '__main__':
     q_1 = Queue()
     q_2 = Queue()
     q_3 = Queue()
+    q_4 = Queue()
     con = False
     farm_array = []
 
@@ -729,7 +900,7 @@ if __name__ == '__main__':
             farm_array.append({'label': str(farm_name), 'value': farm_name})
 
     if sys.argv[3] == 'sql':
-        db_name = "south_africa"
+        db_name = "south_africa_test5"
         db_server_name = "localhost"
         db_user = "axel"
         db_password = "Mojjo@2015"
@@ -748,13 +919,12 @@ if __name__ == '__main__':
         for farm_name in farm_names:
             farm_array.append({'label': str(farm_name), 'value': farm_name})
 
-
     print('init dash...')
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
     server = flask.Flask(__name__)
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets, server=server)
-
+    print('init dash...')
     # server = app.server
 
     styles = {
@@ -769,6 +939,7 @@ if __name__ == '__main__':
         # Hidden div inside the app that stores the intermediate value
         html.Div(id='intermediate-value', style={'display': 'none'}),
         html.Div(id='figure-data', style={'display': 'none'}),
+        html.Div(id='figure-data-herd', style={'display': 'none'}),
         html.Img(id='logo', style={'width': '15vh'},
                  src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol'
                      '-logo.png?itok=V80d7RFe'),
@@ -780,7 +951,8 @@ if __name__ == '__main__':
         html.Br(),
         html.B(id='farm-title'),
 
-        html.Div([html.Pre(id='relayout-data', style={'display': 'none'})], className='three columns'),
+        html.Div([html.Pre(id='relayout-data', style={'display': True})], className='three columns'),
+
 
         html.Div([
             html.Div([
@@ -879,6 +1051,22 @@ if __name__ == '__main__':
         dcc.Graph(
             figure=go.Figure(
                 data=[
+                    go.Scatter(
+                        x=[],
+                        y=[],
+                        name='',
+                    )
+                ],
+                layout=go.Layout(
+                    margin=go.layout.Margin(l=40, r=50, t=10, b=35)
+                )
+            ),
+            style={'height': '80vh', 'padding-top': '1vh'},
+            id='activity-graph-herd'
+        ),
+        dcc.Graph(
+            figure=go.Figure(
+                data=[
                     go.Heatmap(
                         x=[],
                         y=[],
@@ -910,6 +1098,22 @@ if __name__ == '__main__':
             id='signal-strength-graph'
         )
     ])
+
+
+    # @app.callback(
+    #     dash.dependencies.Output('relayout-data-last-config', 'children'),
+    #     [dash.dependencies.Input('relayout-data', 'children')],
+    #     [dash.dependencies.State('relayout-data-last-config', 'value')
+    #      ])
+    # def display_selected_data(v1, previous_state):
+    #     print('previous_state', previous_state)
+    #     if v1 is not None:
+    #         d = json.loads(v1)
+    #         if 'dragmode' in d and d['dragmode'] == 'pan':
+    #             print('do not update field!')
+    #             raise Exception("hack for skipping text field update...")
+    #         else:
+    #             return json.dumps(v1, indent=2)
 
 
     @app.callback(
@@ -963,6 +1167,7 @@ if __name__ == '__main__':
 
         if not d and farm is not None:
             return html.Div([
+                html.P("Individual in the farm: %d" % len(serial)),
                 html.P("Individual with famacha data available: %s" % individual_with_famacha_data)
             ])
 
@@ -992,7 +1197,9 @@ if __name__ == '__main__':
                 print("getting data in file...")
                 map = {}
                 for serial_number in serial_numbers:
-                    rows = execute_sql_query("SELECT * FROM %s_resolution_d WHERE serial_number=%s" % (farm_id, serial_number), log_enabled=False)
+                    rows = execute_sql_query(
+                        "SELECT * FROM %s_resolution_d WHERE serial_number=%s" % (farm_id, serial_number),
+                        log_enabled=False)
                     map[serial_number] = len(rows)
 
             sorted_map = sorted(map.items(), key=operator.itemgetter(1))
@@ -1019,7 +1226,8 @@ if __name__ == '__main__':
             except FileNotFoundError as e:
                 print(e)
 
-            data = {'serial_numbers': sorted_serial_numbers, 'file_path': path, 'farm_id': farm_id, 'famacha': famacha_data, 'weather': weather_data}
+            data = {'serial_numbers': sorted_serial_numbers, 'file_path': path, 'farm_id': farm_id,
+                    'famacha': famacha_data, 'weather': weather_data}
             return json.dumps(data)
 
 
@@ -1070,6 +1278,22 @@ if __name__ == '__main__':
 
 
     @app.callback(
+        dash.dependencies.Output('figure-data-herd', 'children'),
+        [dash.dependencies.Input('resolution-slider', 'value'),
+         dash.dependencies.Input('intermediate-value', 'children'),
+         dash.dependencies.Input('relayout-data', 'children')])
+    def update_figure(value, intermediate_value, relayout_data):
+        global sql_db
+        p = Process(target=thread_activity_herd,
+                    args=(q_4, value, intermediate_value, relayout_data,))
+        p.start()
+        result = q_4.get()
+        p.join()
+        if len(result) > 0:
+            return json.dumps(result, cls=plotly.utils.PlotlyJSONEncoder)
+
+
+    @app.callback(
         dash.dependencies.Output('activity-graph', 'figure'),
         [dash.dependencies.Input('intermediate-value', 'children'),
          dash.dependencies.Input('figure-data', 'children')])
@@ -1083,13 +1307,42 @@ if __name__ == '__main__':
 
         figures = build_activity_graph(_d, _d_f)
 
-        result = {}
+        result = {
+            'data': [],
+            'layout': go.Layout(xaxis={'autorange': True},
+                                yaxis={'autorange': True, 'title': 'Activity level/Accelerometer count'},
+                                autosize=True,
+                                legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+        }
+
         for f in figures:
             result = {
                 'data': f[10]['data'],
                 'layout': go.Layout(f[10]['layout'])
             }
+        return result
 
+
+    @app.callback(
+        dash.dependencies.Output('activity-graph-herd', 'figure'),
+         [dash.dependencies.Input('figure-data-herd', 'children')])
+    def update_figure(data):
+        result = {
+            'data': [],
+            'layout': go.Layout(xaxis=dict(ticks=''),
+                                yaxis=dict(ticks='', nticks=3))
+        }
+
+        if data is not None:
+            j = json.loads(data)
+            range_d = j[0]["range_d"]
+            # ticks = len(j[0]['traces'][0]['y'])
+            result = {
+                'data': j[0]['traces'],
+                'layout': go.Layout(xaxis=dict(ticks=''),
+                                    yaxis=dict(ticks=''))
+            }
+        print('result', result)
         return result
 
 
@@ -1102,7 +1355,13 @@ if __name__ == '__main__':
         j = []
         if data is not None:
             j = json.loads(data)
-        result = {}
+        result = {
+            'data': [],
+            'layout': go.Layout(xaxis={'autorange': True},
+                                yaxis={'autorange': True, 'title': 'Frequency'},
+                                autosize=True,
+                                legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+        }
         for f in j:
             activity = f["activity"]
             time = f["time"]
@@ -1130,4 +1389,5 @@ if __name__ == '__main__':
 
 
     app.css.append_css({"external_url": "https://codepen.io/chriddyp/pen/brPBPO.css"})
+    print('init dash...')
     app.run_server(debug=True, use_reloader=False)
