@@ -461,7 +461,6 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
         # print("1 value is %d" % value)
         for i in input_ag:
             data = None
-            print("5252", relayout_data)
             range_d = get_date_range(json.loads(relayout_data))
             x_max_epoch = range_d['x_max_epoch']
             x_min_epoch = range_d['x_min_epoch']
@@ -564,6 +563,8 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
 
             print(activity)
             print(time)
+
+            scale_dataset_to_screen_size(time[-1], time[0], activity, 800)
 
             if len(activity) > 0:
                 traces = []
@@ -838,14 +839,16 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
                 margin=go.layout.Margin(l=60, r=50, t=5, b=40))
         }])
     else:
-        q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
-            'data': traces,
-            'layout': go.Layout(
+        layout_activity = go.Layout(
                 xaxis={'autorange': True},
                 yaxis={'title': 'Frequency', 'autorange': True},
                 autosize=True,
                 showlegend=True, legend=dict(y=0.98),
                 margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+
+        q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
+            'data': traces,
+            'layout': layout_activity
         }])
 
 
@@ -877,6 +880,16 @@ def execute_sql_query(query, records=None, log_enabled=False):
         return rows
     except Exception as e:
         print("Exeception occured:{}".format(e))
+
+
+def scale_dataset_to_screen_size(last_time, first_time, activity_list, width):
+    print("screen width is %d. There are %d points in activity list." % (width, len(activity_list)))
+    n_timestamps_per_pixel = (last_time - first_time)/ len(activity_list)
+    print(n_timestamps_per_pixel)
+    bined_list = np.zeros(int(width), dtype=int)
+    for i in xrange(0, len(activity_list)):
+        binned_idx = round((activity_list[i] - first_time) * n_timestamps_per_pixel)
+        bined_list[binned_idx] += activity_list[i]
 
 
 if __name__ == '__main__':
@@ -1047,7 +1060,9 @@ if __name__ == '__main__':
             ),
             style={'height': '23vh', 'padding-top': '1vh'},
             id='activity-graph'
-        ),
+        )
+
+        ,
         dcc.Graph(
             figure=go.Figure(
                 data=[
@@ -1098,7 +1113,6 @@ if __name__ == '__main__':
             id='signal-strength-graph'
         )
     ])
-
 
     # @app.callback(
     #     dash.dependencies.Output('relayout-data-last-config', 'children'),
