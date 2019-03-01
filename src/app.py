@@ -5,24 +5,26 @@ import operator
 import sys
 from datetime import datetime, timedelta
 from multiprocessing import Process, Queue
+from threading import Timer
 from time import mktime
 from time import strptime
 
 import dash
 import dash_core_components as dcc
 import dash_html_components as html
+from dash.dependencies import Input, Output
 import numpy as np
 import plotly
 import plotly.graph_objs as go
+import pandas as pd
 import pymysql
+import requests
 import tables
 from scipy import signal
 from dateutil.relativedelta import *
 from ipython_genutils.py3compat import xrange
 import flask
 from itertools import groupby
-import plotly.figure_factory as ff
-import plotly.plotly as py
 
 global sql_db
 
@@ -80,11 +82,7 @@ def get_elapsed_time_array(time_initial, time_next):
 def get_elapsed_time_seconds(time_initial, time_next):
     dt1 = datetime.fromtimestamp(time_initial)
     dt2 = datetime.fromtimestamp(time_next)
-    rd = relativedelta(dt2, dt1)
     result = (dt2 - dt1).total_seconds()
-    # print("elpased time input, %d, %d", time_initial, time_next)
-    # print(result)
-    # print([rd.years, rd.months, rd.days, rd.hours, rd.minutes, rd.seconds])
     return result
 
 
@@ -109,7 +107,6 @@ def find_appropriate_resolution(duration):
 def compare_dates(d1, d2):
     d1_ = datetime.strptime(d1, '%d/%m/%Y').strftime('%Y-%m-%d')
     d2_ = d2.split('T')[0]
-    print(d1_, d2_, d1_ == d2_)
     return d1_ == d2_
 
 
@@ -128,23 +125,15 @@ def is_in_period(start, famacha_day, n):
 def build_weather_trace(time, data_f):
     try:
         print("weather data available for [%s]" % ','.join(data_f['weather'].keys()))
-        # m = pow(10, int(len(str(max(traces[0]['y'])).split('.')[0])/1.3))
         weather_s = [None] * len(time)
         date_weather = data_f['weather'].keys()
         for i, t in enumerate(time):
             day = t.split('T')[0]
-            try:
-                h = t.split('T')[1].split(':')[0]
-            except IndexError as e:
-                h = "12:00"
-                print(e)
             if day in date_weather:
                 list = data_f['weather'][day]
                 mean = 0
                 for item in list:
                     mean += int(item['humidity'])
-                    # if h == item['time'].split(':')[0]:
-                    #     weather_s[i] = item['humidity']
                 weather_s[i] = mean / len(list)
 
         print(weather_s)
@@ -164,24 +153,14 @@ def build_weather_trace(time, data_f):
 def build_famacha_trace(traces, data_f, resolution):
     try:
         time = traces[0]['x']
-        # m = pow(10, int(len(str(max(traces[0]['y'])).split('.')[0])/1.3))
         famacha_s = [None] * len(time)
         serial = traces[0]['name']
         date_ = data_f['famacha'][serial].keys()
         date_famacha = [datetime.strptime(d, '%d/%m/%Y').strftime('%Y-%m-%d') for d in date_]
-
-        # # get interval of time
-        # chunked = chunks(time, 2)
-        # for i, item in enumerate(chunked):
-        # #check if time in period
-        #     for day in date_famacha:
-        #         if is_in_period(day, item[0], item[1]):
-        #             key = datetime.strptime(day, '%Y-%m-%d').strftime('%d/%m/%Y')
-        #             famacha_s[i] = data_f['famacha'][serial][key]
         print("resolution=%d", resolution)
         for i, t in enumerate(time):
             day = t.split('T')[0]
-            if resolution == 1:
+            if resolution == 'resolution_w':
                 for day_in_famacha in date_famacha:
                     key = datetime.strptime(day_in_famacha, '%Y-%m-%d').strftime('%d/%m/%Y')
                     if is_in_period(day, key, 5):
@@ -195,20 +174,24 @@ def build_famacha_trace(traces, data_f, resolution):
         return go.Bar(
             x=time,
             y=famacha_s,
-            # mode='lines+markers',
             name='famacha score',
             # connectgaps=True,
             opacity=0.2,
             yaxis='y2'
-            # marker=dict(
-            #     color='rgb(153,0,255)'
-            # ),
         )
     except (KeyError, TypeError) as e:
         print(e)
 
 
+def interpolate(input_activity):
+    i = np.array(input_activity, dtype=np.float)
+    s= pd.Series(i)
+    s= s.interpolate(method='cubic')
+    return s.tolist()
+
+
 def build_activity_graph(data, data_f):
+    layout = None
     figures = []
     for d in data:
         x_max = d["x_max"]
@@ -224,72 +207,53 @@ def build_activity_graph(data, data_f):
         traces = d["traces"]
         range_d = d["range_d"]
         resolution = d["resolution"]
-
         fig_famacha = build_famacha_trace(traces, data_f, resolution)
-        # fig_weather = build_weather_trace(traces, data_f, resolution)
-
         if fig_famacha is not None:
             traces.append(fig_famacha)
-        # if resolution == 1:
-        #     traces.append(fig_weather)
-        # # traces.append(fig_weather)
-        # print(traces)
-
         if x_max is not None:
+            layout = go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'],
+                                      'range': [range_d['x_min'], range_d['x_max']]},
+                               yaxis={'title': 'Activity level/Accelerometer count'},
+                               yaxis2=dict(
+                                   nticks=3,
+                                   overlaying='y',
+                                   side='right'
+                               ),
+                               yaxis3=dict(
+                                   overlaying='y',
+                                   side='right'
+                               ),
+                               autosize=range_d['auto_range'],
+                               legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
             figures.append(
                 [{'thread_activity': True}, {'signal_size': signal_size}, {'min_activity_value': min_activity_value},
                  {'max_activity_value': max_activity_value}, {'start_date': start_date},
                  {'end_date': end_date}, {'time_range': time_range},
                  {'activity': activity}, {'time': time}, {'relayout_data': relayout_data}, {
                      'data': traces,
-                     'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'],
-                                                'range': [range_d['x_min'], range_d['x_max']]},
-                                         yaxis={'title': 'Activity level/Accelerometer count'},
-                                         yaxis2=dict(
-                                             nticks=3,
-                                             # title='FAMACHA',
-                                             # titlefont=dict(
-                                             #     color='rgb(148, 103, 189)'
-                                             # ),
-                                             # tickfont=dict(
-                                             #     color='rgb(148, 103, 189)'
-                                             # ),
-                                             overlaying='y',
-                                             side='right'
-                                         ),
-                                         yaxis3=dict(
-                                             # title='HUMIDITY',
-                                             # titlefont=dict(
-                                             #     color='rgb(148, 103, 189)'
-                                             # ),
-                                             # tickfont=dict(
-                                             #     color='rgb(148, 103, 189)'
-                                             # ),
-                                             overlaying='y',
-                                             side='right'
-                                         ),
-                                         autosize=range_d['auto_range'],
-                                         legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+                     'layout': layout
                  }])
         else:
+            layout = go.Layout(xaxis={'autorange': True},
+                               yaxis={'title': 'Activity level/Accelerometer count',
+                                      'autorange': True},
+                               autosize=True,
+                               yaxis2=dict(
+                                   nticks=3,
+                                   overlaying='y',
+                                   side='right'
+                               ),
+                               legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
             figures.append(
                 [{'thread_activity': True}, {'signal_size': signal_size}, {'min_activity_value': min_activity_value},
                  {'max_activity_value': max_activity_value}, {'start_date': start_date},
                  {'end_date': end_date}, {'time_range': time_range},
                  {'activity': activity}, {'time': time}, {'relayout_data': relayout_data}, {
                      'data': traces,
-                     'layout': go.Layout(xaxis={'autorange': True},
-                                         yaxis={'title': 'Activity level/Accelerometer count',
-                                                'autorange': True},
-                                         autosize=True,
-                                         yaxis2=dict(
-                                             nticks=3,
-                                             overlaying='y',
-                                             side='right'
-                                         ),
-                                         legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+                     'layout': layout
                  }])
-    return figures
+
+    return figures, layout
 
 
 def pad(l, size, padding):
@@ -313,30 +277,16 @@ def get_resolution_string(value):
     return result
 
 
-def thread_activity_herd(q_4, value, intermediate_value, relayout_data):
-
-    serial_numbers = []
-
-    try:
-        serial_numbers = json.loads(intermediate_value)['serial_numbers']
-    except TypeError as e:
-        print(e)
-
-    _d = []
-
-    # print("1 the selected serial number are: %s" % ', '.join(str(e) for e in input_ag))
-    # print("1 value is %d" % value)
-    timestamp_queried = False
-
+def thread_activity_herd(q_4, intermediate_value, cubic_interpolation, relayout_data):
     data = None
     range_d = get_date_range(json.loads(relayout_data))
     x_max_epoch = range_d['x_max_epoch']
     x_min_epoch = range_d['x_min_epoch']
     x_max = range_d['x_max']
+    resolution_string = 'resolution_w'
     if range_d['x_max'] is not None:
         value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
-
-    resolution_string = get_resolution_string(value)
+        resolution_string = get_resolution_string(value)
 
     if intermediate_value is not None:
         raw = json.loads(intermediate_value)
@@ -347,9 +297,6 @@ def thread_activity_herd(q_4, value, intermediate_value, relayout_data):
         if sys.argv[3] == 'h5':
             print("opening file in thread test")
             h5 = tables.open_file(file_path, "r")
-
-
-        if sys.argv[3] == 'h5':
             data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
                      x['first_sensor_value'])
                     for x in h5.root.resolution_m.data if x_min_epoch < x['timestamp'] < x_max_epoch]
@@ -361,20 +308,19 @@ def thread_activity_herd(q_4, value, intermediate_value, relayout_data):
             data = [(x['timestamp_s'], x['first_sensor_value'], x['serial_number']) for x in rows]
 
     activity_list = []
-    time = None
-    max = 0
-
     data_list = []
 
     if data is not None:
         data_list = [list(v) for l, v in groupby(sorted(data, key=lambda x: x[2]), lambda x: x[2])]
 
     records = []
+    time = None
+    max = 0
     for item in data_list:
         serial = item[0][2]
         a = [(x[1]) for x in item]
-        if len(a) < 3:
-            continue
+        # if len(a) < 3:
+        #     continue
         if len(a) > max:
             max = len(a)
             time = [(x[0]) for x in item]
@@ -384,11 +330,12 @@ def thread_activity_herd(q_4, value, intermediate_value, relayout_data):
     for i in records:
         a = pad(i[0], max, 0)
         ids.append(i[1])
-        activity_list.append(a)
-
-    print("activity level-->resolution=%d" % value)
-
-    # print(activity_list)
+        if 'cubic' in cubic_interpolation:
+            activity_list.append(interpolate(a))
+        else:
+            activity_list.append(a)
+    print(ids)
+    print(activity_list)
     print(time)
 
     if len(activity_list) > 0:
@@ -403,30 +350,17 @@ def thread_activity_herd(q_4, value, intermediate_value, relayout_data):
         start_date = datetime.fromtimestamp(d1).strftime('%d/%m/%Y %H:%M:%S')
         end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
         time_range = get_elapsed_time_string(d1, d2)
-        if value == 2:
+        if resolution_string == 'resolution_d':
             time = [t.split('T')[0] for t in time]
 
         serials = [".."+str(v)[5:] for v in ids]
-
-        # annotations = [[str(j) for j in i] for i in activity_list]
-        # trace = ff.create_annotated_heatmap(z=activity_list, x=time, y=serials, annotation_text=annotations)
-        # plotly.offline.init_notebook_mode(connected=True)
-        # plotly.offline.iplot(trace, filename='annotated_heatmap_numpy')
 
         trace = go.Heatmap(z=activity_list,
                            x=time,
                            y=serials,
                            colorscale='Viridis')
-
-
         traces.append(trace)
-
-        # trace = go.Heatmap(z=[[1, 20, 30, 50, 1], [20, 1, 60, 80, 30], [30, 60, 1, -10, 20]],
-        #                    x=['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-        #                    y=['Morning', 'Afternoon', 'Evening'])
-
-        # traces.append(trace)
-
+        _d = []
         _d.append({"activity": activity_list[0],
                    "time": time,
                    "range_d": range_d,
@@ -439,14 +373,14 @@ def thread_activity_herd(q_4, value, intermediate_value, relayout_data):
                    "traces": traces,
                    "x_max": x_max,
                    "relayout_data": relayout_data,
-                   'resolution': value})
+                   'resolution': resolution_string})
         q_4.put(_d)
 
     if q_4.empty():
         q_4.put([])
 
 
-def thread_activity(q_1, selected_serial_number, value, intermediate_value, relayout_data):
+def thread_activity(q_1, selected_serial_number, intermediate_value, relayout_data, cubic_interpolation):
     input_ag = []
     _d = []
 
@@ -465,11 +399,11 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
             x_max_epoch = range_d['x_max_epoch']
             x_min_epoch = range_d['x_min_epoch']
             x_max = range_d['x_max']
+            resolution_string = 'resolution_w'
             if range_d['x_max'] is not None:
                 value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
-
+                resolution_string = get_resolution_string(value)
             raw = json.loads(intermediate_value)
-
             file_path = raw["file_path"]
             farm_id = raw["farm_id"]
 
@@ -477,94 +411,26 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                 print("opening file in thread test")
                 h5 = tables.open_file(file_path, "r")
 
-            if value == 0:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_m.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, first_sensor_value FROM %s_resolution_m WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'])
-                        for x in rows]
+            if sys.argv[3] == 'h5':
+                data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                         x['first_sensor_value'])
+                        for x in h5.root.resolution_m.data if
+                        x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+            if sys.argv[3] == 'sql':
+                rows = execute_sql_query(
+                    "SELECT timestamp, first_sensor_value FROM %s_%s WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                    (farm_id, resolution_string, i, x_min_epoch, x_max_epoch))
+                data = [
+                    (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'])
+                    for x in rows]
 
-            if value == 1:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_w.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, first_sensor_value FROM %s_resolution_w WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [
-                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['first_sensor_value'])
-                        for x in rows]
-            if value == 2:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_d.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, first_sensor_value FROM %s_resolution_d WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in rows]
-            if value == 3:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, first_sensor_value FROM %s_resolution_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in rows]
-            if value == 4:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_h_h.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, first_sensor_value FROM %s_resolution_h_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in rows]
-            if value == 5:
-                if sys.argv[3] == 'h5':
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in h5.root.resolution_min.data if
-                            x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                if sys.argv[3] == 'sql':
-                    rows = execute_sql_query(
-                        "SELECT timestamp, first_sensor_value FROM %s_resolution_min WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                        (farm_id, i, x_min_epoch, x_max_epoch))
-                    data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['first_sensor_value'])
-                            for x in rows]
-            # h5.close()
             activity = [(x[1]) for x in data]
             time = [(x[0]) for x in data]
-            print("activity level-->resolution=%d" % value)
 
             print(activity)
             print(time)
 
-            scale_dataset_to_screen_size(time[-1], time[0], activity, 800)
+            # activity, time = scale_dataset_to_screen_size(activity, time, 10)
 
             if len(activity) > 0:
                 traces = []
@@ -579,8 +445,11 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                 end_date = datetime.fromtimestamp(d2).strftime('%d/%m/%Y %H:%M:%S')
                 time_range = get_elapsed_time_string(d1, d2)
 
-                if value == 2:
+                if resolution_string == 'resolution_d':
                     time = [t.split('T')[0] for t in time]
+
+                if 'cubic' in cubic_interpolation:
+                    activity = interpolate(activity)
 
                 traces.append(go.Bar(
                     x=time,
@@ -588,6 +457,7 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                     name=str(i),
                     opacity=0.8
                 ))
+
                 _d.append({"activity": activity,
                            "time": time,
                            "range_d": range_d,
@@ -600,202 +470,137 @@ def thread_activity(q_1, selected_serial_number, value, intermediate_value, rela
                            "traces": traces,
                            "x_max": x_max,
                            "relayout_data": relayout_data,
-                           'resolution': value})
+                           'resolution': resolution_string})
                 q_1.put(_d)
     if q_1.empty():
         q_1.put([])
 
 
-def thread_signal(q_2, selected_serial_number, value, intermediate_value, relayout_data):
-    try:
-        input_ss = []
-        x_max = None
-        if isinstance(selected_serial_number, list):
-            input_ss.extend(selected_serial_number)
-        else:
-            input_ss.append(selected_serial_number)
-        traces = []
-        if not selected_serial_number:
-            print("2 selected_serial_number empty")
-        else:
-            for i in input_ss:
-                data = None
-                range_d = get_date_range(json.loads(relayout_data))
-                x_max_epoch = range_d['x_max_epoch']
-                x_min_epoch = range_d['x_min_epoch']
-                if range_d['x_max'] is not None:
-                    value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
+def thread_signal(q_2, selected_serial_number, intermediate_value, relayout_data):
+    if intermediate_value is None:
+        selected_serial_number = []
+    input_ss = []
+    x_max = None
+    if isinstance(selected_serial_number, list):
+        input_ss.extend(selected_serial_number)
+    else:
+        input_ss.append(selected_serial_number)
+    traces = []
+    if not selected_serial_number:
+        print("2 selected_serial_number empty")
+    else:
+        for i in input_ss:
+            data = None
+            range_d = get_date_range(json.loads(relayout_data))
+            x_max_epoch = range_d['x_max_epoch']
+            x_min_epoch = range_d['x_min_epoch']
+            resolution_string = 'resolution_w'
+            if range_d['x_max'] is not None:
+                value = find_appropriate_resolution(get_elapsed_time_seconds(x_min_epoch, x_max_epoch))
+                resolution_string = get_resolution_string(value)
 
-                raw = json.loads(intermediate_value)
+            raw = json.loads(intermediate_value)
 
-                file_path = raw["file_path"]
-                farm_id = raw["farm_id"]
-                if sys.argv[3] == 'h5':
-                    print("opening file in thread signal")
-                    h5 = tables.open_file(file_path, "r")
+            file_path = raw["file_path"]
+            farm_id = raw["farm_id"]
+            if sys.argv[3] == 'h5':
+                print("opening file in thread signal")
+                h5 = tables.open_file(file_path, "r")
 
-                if value == 0:
-                    if sys.argv[3] == 'h5':
-                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                                 x['signal_strength_max'], x['signal_strength_min'])
-                                for x in h5.root.resolution_m.data if
-                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                    if sys.argv[3] == 'sql':
-                        rows = execute_sql_query(
-                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_m WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                            (farm_id, i, x_min_epoch, x_max_epoch))
-                        data = [
-                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'], x['signal_strength_min'])
-                            for x in rows]
-                if value == 1:
-                    if sys.argv[3] == 'h5':
-                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                                 x['signal_strength_max'], x['signal_strength_min'])
-                                for x in h5.root.resolution_w.data if
-                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                    if sys.argv[3] == 'sql':
-                        rows = execute_sql_query(
-                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_w WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                            (farm_id, i, x_min_epoch, x_max_epoch))
-                        data = [
-                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'],
-                             x['signal_strength_min'])
-                            for x in rows]
-                if value == 2:
-                    if sys.argv[3] == 'h5':
-                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                                 x['signal_strength_max'], x['signal_strength_min'])
-                                for x in h5.root.resolution_d.data if
-                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                    if sys.argv[3] == 'sql':
-                        rows = execute_sql_query(
-                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_d WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                            (farm_id, i, x_min_epoch, x_max_epoch))
-                        data = [
-                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'],
-                             x['signal_strength_min'])
-                            for x in rows]
-                if value == 3:
-                    if sys.argv[3] == 'h5':
-                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                                 x['signal_strength_max'], x['signal_strength_min'])
-                                for x in h5.root.resolution_h.data if
-                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                    if sys.argv[3] == 'sql':
-                        rows = execute_sql_query(
-                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                            (farm_id, i, x_min_epoch, x_max_epoch))
-                        data = [
-                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'],
-                             x['signal_strength_min'])
-                            for x in rows]
-                if value == 4:
-                    if sys.argv[3] == 'h5':
-                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                                 x['signal_strength_max'], x['signal_strength_min'])
-                                for x in h5.root.resolution_h_h.data if
-                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                    if sys.argv[3] == 'sql':
-                        rows = execute_sql_query(
-                            "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_resolution_h_h WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                            (farm_id, i, x_min_epoch, x_max_epoch))
-                        data = [
-                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                             x['signal_strength_max'],
-                             x['signal_strength_min'])
-                            for x in rows]
-                if value == 5:
-                    if sys.argv[3] == 'h5':
-                        data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
-                                 x['signal_strength'])
-                                for x in h5.root.resolution_min.data if
-                                x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
-                    if sys.argv[3] == 'sql':
-                        rows = execute_sql_query(
-                            "SELECT timestamp, signal_strength FROM %s_resolution_min WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
-                            (farm_id, i, x_min_epoch, x_max_epoch))
-                        data = [
-                            (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength'])
-                            for x in rows]
-
-                time = [(x[0]) for x in data]
-                fig_weather = build_weather_trace(time, raw)
-                traces.append(fig_weather)
-
-                if value is not 5:
-                    signal_strength_min = [(x[2]) for x in data]
-                    signal_strength_max = [(x[1]) for x in data]
-                    print("thread_signal resolution=%d" % value)
-                    if signal_strength_min is not None:
-                        traces.append(go.Scatter(
-                            x=time,
-                            y=signal_strength_min,
-                            mode='lines+markers',
-                            name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
-
-                        ))
-                    if signal_strength_max is not None:
-                        traces.append(go.Scatter(
-                            x=time,
-                            y=signal_strength_max,
-                            mode='lines+markers',
-                            name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
-                        ))
+            if sys.argv[3] == 'h5':
+                data = [(datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                         x['signal_strength_max'], x['signal_strength_min'])
+                        for x in h5.root.resolution_m.data if
+                        x['serial_number'] == i and x_min_epoch < x['timestamp'] < x_max_epoch]
+            if sys.argv[3] == 'sql':
+                if resolution_string == 'resolution_min':
+                    rows = execute_sql_query(
+                        "SELECT timestamp, signal_strength FROM %s_%s WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                        (farm_id, resolution_string, i, x_min_epoch, x_max_epoch))
+                    data = [
+                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'), x['signal_strength'])
+                        for x in rows]
                 else:
-                    signal_strength_ = [(x[1]) for x in data]
-                    if signal_strength_ is not None:
-                        traces.append(go.Scatter(
-                            x=time,
-                            y=signal_strength_,
-                            mode='lines+markers',
-                            name=("signal strength%d" % i) if (len(input_ss) > 1) else "signal strength"
+                    rows = execute_sql_query(
+                        "SELECT timestamp, signal_strength_max, signal_strength_min FROM %s_%s WHERE serial_number=%s AND timestamp BETWEEN %s AND %s" %
+                        (farm_id, resolution_string, i, x_min_epoch, x_max_epoch))
+                    data = [
+                        (datetime.utcfromtimestamp(x['timestamp']).strftime('%Y-%m-%dT%H:%M'),
+                         x['signal_strength_max'], x['signal_strength_min'])
+                        for x in rows]
 
-                        ))
+            time = [(x[0]) for x in data]
+            fig_weather = build_weather_trace(time, raw)
+            traces.append(fig_weather)
 
-        if x_max is not None:
-            q_2.put({
-                'data': traces,
-                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'],
-                                           'range': [range_d['x_min'], range_d['x_max']]},
-                                    yaxis={'title': 'RSSI(received signal strength in)'},
-                                    yaxis2=dict(
-                                        anchor='x',
-                                        overlaying='y',
-                                        side='right',
-                                        title='Humidity'
-                                    ),
-                                    autosize=range_d['auto_range'],
-                                    showlegend=False,
-                                    # legend=dict(y=1, x=0),
-                                    margin=go.layout.Margin(l=60, r=50, t=5, b=40)
-                                    ),
-                'resolution': value
-            })
-        else:
-            q_2.put({
-                'data': traces,
-                'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
-                                                                                                'strength in)',
-                                                                                       'autorange': True},
-                                    yaxis2=dict(
-                                        anchor='x',
-                                        overlaying='y',
-                                        side='right',
-                                        title='Humidity'
-                                    ),
-                                    autosize=True,
-                                    showlegend=False,
-                                    # legend=dict(y=1, x=0),
-                                    margin=go.layout.Margin(l=60, r=50, t=5, b=40)
-                                    ),
-                'resolution': value
-            })
-    except TypeError as e:
-        print(e)
+            if resolution_string is not 'resolution_min':
+                signal_strength_min = [(x[2]) for x in data]
+                signal_strength_max = [(x[1]) for x in data]
+                if signal_strength_min is not None:
+                    traces.append(go.Scatter(
+                        x=time,
+                        y=signal_strength_min,
+                        mode='lines+markers',
+                        name=("signal strength min %d" % i) if (len(input_ss) > 1) else "signal strength min"
+
+                    ))
+                if signal_strength_max is not None:
+                    traces.append(go.Scatter(
+                        x=time,
+                        y=signal_strength_max,
+                        mode='lines+markers',
+                        name=("signal strength max %d" % i) if (len(input_ss) > 1) else "signal strength min"
+                    ))
+            else:
+                signal_strength_ = [(x[1]) for x in data]
+                if signal_strength_ is not None:
+                    traces.append(go.Scatter(
+                        x=time,
+                        y=signal_strength_,
+                        mode='lines+markers',
+                        name=("signal strength%d" % i) if (len(input_ss) > 1) else "signal strength"
+
+                    ))
+
+    if x_max is not None:
+        q_2.put({
+            'data': traces,
+            'layout': go.Layout(xaxis={'title': 'Time', 'autorange': range_d['xaxis_autorange'],
+                                       'range': [range_d['x_min'], range_d['x_max']]},
+                                yaxis={'title': 'RSSI(received signal strength in)'},
+                                yaxis2=dict(
+                                    anchor='x',
+                                    overlaying='y',
+                                    side='right',
+                                    title='Humidity'
+                                ),
+                                autosize=range_d['auto_range'],
+                                showlegend=False,
+                                # legend=dict(y=1, x=0),
+                                margin=go.layout.Margin(l=60, r=50, t=5, b=40)
+                                ),
+            'resolution': "resolution_d"
+        })
+    else:
+        q_2.put({
+            'data': traces,
+            'layout': go.Layout(xaxis={'title': 'Time', 'autorange': True}, yaxis={'title': 'RSSI(received signal '
+                                                                                            'strength in)',
+                                                                                   'autorange': True},
+                                yaxis2=dict(
+                                    anchor='x',
+                                    overlaying='y',
+                                    side='right',
+                                    title='Humidity'
+                                ),
+                                autosize=True,
+                                showlegend=False,
+                                # legend=dict(y=1, x=0),
+                                margin=go.layout.Margin(l=60, r=50, t=5, b=40)
+                                ),
+            'resolution': "resolution_d"
+        })
+
 
 
 def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
@@ -840,11 +645,11 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
         }])
     else:
         layout_activity = go.Layout(
-                xaxis={'autorange': True},
-                yaxis={'title': 'Frequency', 'autorange': True},
-                autosize=True,
-                showlegend=True, legend=dict(y=0.98),
-                margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+            xaxis={'autorange': True},
+            yaxis={'title': 'Frequency', 'autorange': True},
+            autosize=True,
+            showlegend=True, legend=dict(y=0.98),
+            margin=go.layout.Margin(l=60, r=50, t=5, b=40))
 
         q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
             'data': traces,
@@ -882,14 +687,296 @@ def execute_sql_query(query, records=None, log_enabled=False):
         print("Exeception occured:{}".format(e))
 
 
-def scale_dataset_to_screen_size(last_time, first_time, activity_list, width):
+def get_figure_width(fig_id="activity-graph", url="http://127.0.0.1:8050/"):
+    r = requests.get(url)
+    # html_string = r.content
+    # print(html_string)
+    # parsed_html = BeautifulSoup(html_string, 'html.parser')
+    # data = parsed_html.find(id=fig_id)
+    return -1
+
+
+def scale_dataset_to_screen_size(activity_list, timestamp_list, width):
     print("screen width is %d. There are %d points in activity list." % (width, len(activity_list)))
-    n_timestamps_per_pixel = (last_time - first_time)/ len(activity_list)
-    print(n_timestamps_per_pixel)
-    bined_list = np.zeros(int(width), dtype=int)
-    for i in xrange(0, len(activity_list)):
-        binned_idx = round((activity_list[i] - first_time) * n_timestamps_per_pixel)
-        bined_list[binned_idx] += activity_list[i]
+    n_samples = len(activity_list)
+    n_timestamps_per_pixel = n_samples / width
+    binned_activity_list = [None for _ in range(width)]
+    binned_timestamp_list = [None for _ in range(width)]
+    try:
+        for i in xrange(0, len(activity_list)):
+            binned_idx = round(i / n_timestamps_per_pixel)
+            binned_timestamp_list[binned_idx] = timestamp_list[i]
+            if activity_list[i] is None:
+                continue
+            #need to initialize value for later increment
+            if binned_activity_list[binned_idx] is None:
+
+                binned_activity_list[binned_idx] = 0
+            binned_activity_list[binned_idx] += activity_list[i]
+    except IndexError as e:
+        print(len(binned_activity_list), binned_idx, e, binned_activity_list)
+    print("length after scale to screen of width %d is %d." % (width, len(binned_activity_list)))
+    print(binned_activity_list)
+    print(binned_timestamp_list)
+
+    if None in binned_timestamp_list:
+        return activity_list, timestamp_list
+
+    return binned_activity_list, binned_timestamp_list
+
+
+def build_default_app_layout(app):
+    app.layout = html.Div(
+        [
+        html.Div(id='output'),
+        # Hidden div inside the app that stores the intermediate value
+        html.Div(id='intermediate-value', style={'display': 'none'}),
+        html.Div(id='figure-data', style={'display': 'none'}),
+        html.Div(id='figure-data-herd', style={'display': 'none'}),
+        html.Img(id='logo', style={'width': '15vh'},
+                 src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol'
+                     '-logo.png?itok=V80d7RFe'),
+        html.Br(),
+        html.Big(
+            children="PhD Thesis: Deep learning of activity monitoring data for disease detection to support "
+                     "livestock farming in resource-poor communities in Africa."),
+        html.Br(),
+        html.Br(),
+        # html.B(id='farm-title'),
+        html.Div([html.Pre(id='relayout-data', style={'display': 'none'})]),
+        html.Div([
+            html.Div([
+                html.Label('Farm selection:', style={'color': 'white', 'font-weight': 'bold'}),
+                dcc.Dropdown(
+                    id='farm-dropdown',
+                    options=farm_array,
+                    placeholder="Select farm...",
+                    style={'width': '47vh', 'margin-bottom': '1vh'}
+                    # value=40121100718
+                ),
+                html.Label('Animal selection:', style={'color': 'white', 'font-weight': 'bold'}),
+                dcc.Dropdown(
+                    id='serial-number-dropdown',
+                    options=[],
+                    multi=False,
+                    placeholder="Select animal...",
+                    style={'width': '47vh', 'margin-bottom': '2vh'}
+                    # value=40121100718
+                ),
+
+                html.Div([
+                    html.Div([
+                        html.Label('Transform:', style={'color': 'white', 'font-weight': 'bold'}),
+                        dcc.RadioItems(
+                            id='transform-radio',
+                            options=[
+                                {'label': 'STFT', 'value': 'STFT'},
+                                {'label': 'CWT', 'value': 'CWT'}
+                            ],
+                            labelStyle={'display': 'inline-block', 'color': 'white'},
+                            value='CWT')],
+                        className='three columns',
+                        style={'margin-bottom': '3vh', 'margin-left': '0vh', 'width': '12vh'}
+                    ),
+                    html.Div([
+                        html.Label('Window size:', style={'width': '10vh', 'margin-left': '0vh', 'color': 'white',
+                                                          'font-weight': 'bold'}),
+                        dcc.Input(
+                            id='window-size-input',
+                            placeholder='Input size of window here...',
+                            type='text',
+                            value='40',
+                            style={'width': '5vh', 'height': '2vh', 'margin-left': '0vh'}
+                        )],
+                        className='three columns'
+
+                    ),
+
+                    html.Div([
+                        dcc.Checklist(
+                            id='cubic-interpolation',
+                            options=[
+                                {'label': 'Cubic interpolation', 'value': 'cubic'}
+                            ],
+                            values=['cubic'],
+                            labelStyle={'display': 'inline-block'},
+                            style={'margin-left': '6vh', 'color': 'white', 'font-weight': 'bold'}
+                        )
+                    ],
+                        className='three columns'
+
+                    ),
+
+
+                ],
+                    style={'margin-bottom': '8vh'}
+                )
+            ], className='two columns', style={'margin-left': '1vh'}),
+
+            html.Div([
+                # html.Label('logs:'),
+                html.Div(id='log-div', style={'color': 'white'}),
+            ], style={'margin-left': '35vh', 'margin-top': '0vh', 'width': '50vh'}, className='two columns')
+        ],  id='dashboard',
+            style={'position': 'relative', 'width': '100%', 'height': '20.4vh', 'min-height': '20.4vh', 'max-height': '20.4vh', 'background-color': 'gray', 'padding': '0vh', 'margin': '0vh'}),
+
+        html.Div([
+            dcc.Tabs(id="tabs-main", value='tab-time', children=[
+                dcc.Tab(label='Time domain', value='tab-time', children=[
+                    html.Div([
+                        html.Big(
+                        id="no-farm-label-1",
+                        children="No farm selected.")
+                    ], style={'width': '100%', 'text-align': 'center', 'margin-top': '5vh'})
+                    ,
+                    dcc.Graph(
+                        figure=go.Figure(
+                            data=[
+                                go.Scatter(
+                                    x=[],
+                                    y=[],
+                                    name='',
+                                )
+                            ],
+                            layout=go.Layout(
+                                margin=go.layout.Margin(l=0, r=50, t=10, b=35)
+                            )
+                        ),
+                        style={'height': '23vh', 'padding-top': '1vh', 'opacity': 0},
+                        id='activity-graph'
+                    ),
+                    dcc.Graph(
+                        figure=go.Figure(
+                            data=[
+                                go.Scatter(
+                                    x=[],
+                                    y=[],
+                                    name='',
+                                )
+                            ],
+                            layout=go.Layout(
+                                margin=go.layout.Margin(l=0, r=50, t=10, b=35)
+                            )
+                        ),
+                        style={'height': '80vh', 'padding-top': '1vh', 'opacity': 0},
+                        id='activity-graph-herd'
+                    ),
+                    dcc.Graph(
+                        figure=go.Figure(
+                            data=[
+                                go.Scatter(
+                                    x=[],
+                                    y=[],
+                                    name='',
+                                )
+                            ],
+                            layout=go.Layout(
+                                margin=go.layout.Margin(l=0, r=50, t=5, b=0)
+                            )
+                        ),
+                        style={'height': '20vh', 'opacity': 0},
+                        id='signal-strength-graph'
+                    )
+                ]
+
+                        ),
+                dcc.Tab(label='Frequency domain', value='tab-frequency', children=[
+                    html.Div([
+                        html.Big(
+                        id="no-farm-label-2",
+                        children="No farm selected.")
+                    ], style={'width': '100%', 'text-align': 'center', 'margin-top': '5vh'})
+                    ,
+                    dcc.Graph(
+                        figure=go.Figure(
+                            data=[
+                                go.Heatmap(
+                                    x=[],
+                                    y=[],
+                                    name='',
+                                )
+                            ],
+                            layout=go.Layout(
+                                margin=go.layout.Margin(l=0, r=50, t=5, b=35)
+
+                            )
+                        ),
+                        style={'height': '20vh', 'opacity': 0},
+                        id='spectrogram-activity-graph'
+                    )
+                ]),
+            ]),
+            html.Div(id='tabs-content')
+        ], id='content-below', style={'width': '100%', 'margin-left': '0px'}, className='one column')
+
+        # dcc.Graph(
+        #     figure=go.Figure(
+        #         data=[
+        #             go.Scatter(
+        #                 x=[],
+        #                 y=[],
+        #                 name='',
+        #             )
+        #         ],
+        #         layout=go.Layout(
+        #             margin=go.layout.Margin(l=40, r=50, t=10, b=35)
+        #         )
+        #     ),
+        #     style={'height': '23vh', 'padding-top': '1vh'},
+        #     id='activity-graph'
+        # )
+        #
+        # ,
+        # dcc.Graph(
+        #     figure=go.Figure(
+        #         data=[
+        #             go.Scatter(
+        #                 x=[],
+        #                 y=[],
+        #                 name='',
+        #             )
+        #         ],
+        #         layout=go.Layout(
+        #             margin=go.layout.Margin(l=40, r=50, t=10, b=35)
+        #         )
+        #     ),
+        #     style={'height': '80vh', 'padding-top': '1vh'},
+        #     id='activity-graph-herd'
+        # ),
+        # dcc.Graph(
+        #     figure=go.Figure(
+        #         data=[
+        #             go.Heatmap(
+        #                 x=[],
+        #                 y=[],
+        #                 name='',
+        #             )
+        #         ],
+        #         layout=go.Layout(
+        #             margin=go.layout.Margin(l=40, r=50, t=5, b=35)
+        #
+        #         )
+        #     ),
+        #     style={'height': '20vh'},
+        #     id='spectrogram-activity-graph'
+        # ),
+        # dcc.Graph(
+        #     figure=go.Figure(
+        #         data=[
+        #             go.Scatter(
+        #                 x=[],
+        #                 y=[],
+        #                 name='',
+        #             )
+        #         ],
+        #         layout=go.Layout(
+        #             margin=go.layout.Margin(l=40, r=50, t=5, b=0)
+        #         )
+        #     ),
+        #     style={'height': '20vh'},
+        #     id='signal-strength-graph'
+        # )
+    ], id='main-div')
 
 
 if __name__ == '__main__':
@@ -934,208 +1021,52 @@ if __name__ == '__main__':
 
     print('init dash...')
     external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
-
     server = flask.Flask(__name__)
     app = dash.Dash(__name__, external_stylesheets=external_stylesheets, server=server)
-    print('init dash...')
+    build_default_app_layout(app)
     # server = app.server
-
-    styles = {
-        'pre': {
-            'border': 'thin lightgrey solid',
-            'overflowX': 'scroll'
-        }
-    }
-
-    app.layout = html.Div([
-        html.Div(id='output'),
-        # Hidden div inside the app that stores the intermediate value
-        html.Div(id='intermediate-value', style={'display': 'none'}),
-        html.Div(id='figure-data', style={'display': 'none'}),
-        html.Div(id='figure-data-herd', style={'display': 'none'}),
-        html.Img(id='logo', style={'width': '15vh'},
-                 src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol'
-                     '-logo.png?itok=V80d7RFe'),
-        html.Br(),
-        html.Big(
-            children="PhD Thesis: Deep learning of activity monitoring data for disease detection to support "
-                     "livestock farming in resource-poor communities in Africa."),
-        html.Br(),
-        html.Br(),
-        html.B(id='farm-title'),
-
-        html.Div([html.Pre(id='relayout-data', style={'display': True})], className='three columns'),
+    app.css.append_css({"external_url": "https://codepen.io/chriddyp/pen/brPBPO.css"})
 
 
-        html.Div([
-            html.Div([
-                html.Label('Farm selection:', style={'color': 'white', 'font-weight': 'bold'}),
-                dcc.Dropdown(
-                    id='farm-dropdown',
-                    options=farm_array,
-                    placeholder="Select farm...",
-                    style={'width': '47vh', 'margin-bottom': '1vh'}
-                    # value=40121100718
-                ),
-                html.Label('Animal selection:', style={'color': 'white', 'font-weight': 'bold'}),
-                dcc.Dropdown(
-                    id='serial-number-dropdown',
-                    options=[],
-                    multi=False,
-                    placeholder="Select animal...",
-                    style={'width': '47vh', 'margin-bottom': '2vh'}
-                    # value=40121100718
-                ),
-
-                html.Div([
-                    html.Div([
-                        html.Label('Sample rate (1 sample per unit of time):',
-                                   style={'color': 'white', 'font-weight': 'bold'}),
-                        dcc.Slider(
-                            id='resolution-slider',
-                            min=0,
-                            max=5,
-                            marks={
-                                0: 'Month',
-                                1: 'Week',
-                                2: 'Day',
-                                3: 'Hour',
-                                4: '30min',
-                                5: '3min'
-                            },
-                            value=1)],
-                        className='two columns',
-                        style={'width': '23vh', 'margin-bottom': '3vh', 'margin-left': '1vh', 'display': 'none'}
-                    ),
-                    html.Div([
-                        html.Label('Transform:', style={'color': 'white', 'font-weight': 'bold'}),
-                        dcc.RadioItems(
-                            id='transform-radio',
-                            options=[
-                                {'label': 'STFT', 'value': 'STFT'},
-                                {'label': 'CWT', 'value': 'CWT'}
-                            ],
-                            labelStyle={'display': 'inline-block', 'color': 'white'},
-                            value='CWT')],
-                        className='two columns',
-                        style={'margin-bottom': '3vh', 'margin-left': '0vh', 'width': '12vh'}
-                    ),
-                    html.Div([
-                        html.Label('Window size:', style={'width': '10vh', 'margin-left': '0vh', 'color': 'white',
-                                                          'font-weight': 'bold'}),
-                        dcc.Input(
-                            id='window-size-input',
-                            placeholder='Input size of window here...',
-                            type='text',
-                            value='40',
-                            style={'width': '5vh', 'height': '2vh', 'margin-left': '0vh'}
-                        )],
-                        className='two columns'
-
-                    )
-                ],
-                    style={'margin-bottom': '8vh'}
-                )
-            ], className='two columns'),
-
-            html.Div([
-                # html.Label('logs:'),
-                html.Div(id='log-div', style={'color': 'white'}),
-            ], style={'margin-left': '35vh', 'margin-top': '0vh', 'width': '50vh'}, className='two columns')
-        ],
-            style={'width': '110vh', 'height': '20.4vh', 'background-color': 'gray', 'padding': '1vh'}),
-
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Scatter(
-                        x=[],
-                        y=[],
-                        name='',
-                    )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=10, b=35)
-                )
-            ),
-            style={'height': '23vh', 'padding-top': '1vh'},
-            id='activity-graph'
-        )
-
-        ,
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Scatter(
-                        x=[],
-                        y=[],
-                        name='',
-                    )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=10, b=35)
-                )
-            ),
-            style={'height': '80vh', 'padding-top': '1vh'},
-            id='activity-graph-herd'
-        ),
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Heatmap(
-                        x=[],
-                        y=[],
-                        name='',
-                    )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=5, b=35)
-
-                )
-            ),
-            style={'height': '20vh'},
-            id='spectrogram-activity-graph'
-        ),
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Scatter(
-                        x=[],
-                        y=[],
-                        name='',
-                    )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=5, b=0)
-                )
-            ),
-            style={'height': '20vh'},
-            id='signal-strength-graph'
-        )
-    ])
-
-    # @app.callback(
-    #     dash.dependencies.Output('relayout-data-last-config', 'children'),
-    #     [dash.dependencies.Input('relayout-data', 'children')],
-    #     [dash.dependencies.State('relayout-data-last-config', 'value')
-    #      ])
-    # def display_selected_data(v1, previous_state):
-    #     print('previous_state', previous_state)
-    #     if v1 is not None:
-    #         d = json.loads(v1)
-    #         if 'dragmode' in d and d['dragmode'] == 'pan':
-    #             print('do not update field!')
-    #             raise Exception("hack for skipping text field update...")
-    #         else:
-    #             return json.dumps(v1, indent=2)
+    # @app.callback(Output('tabs-content', 'children'),
+    #               [Input('tabs-main', 'value')])
+    # def render_content(tab):
+    #     if tab == 'tab-time':
+    #         return html.Div([
+    #             html.H3('Tab content 1'),
+    #             dcc.Graph(
+    #                 id='graph-1-tabs',
+    #                 figure={
+    #                     'data': [{
+    #                         'x': [1, 2, 3],
+    #                         'y': [3, 1, 2],
+    #                         'type': 'bar'
+    #                     }]
+    #                 }
+    #             )
+    #         ])
+    #     elif tab == 'tab-frequency':
+    #         return html.Div([
+    #             html.H3('Tab content 2'),
+    #             dcc.Graph(
+    #                 id='graph-2-tabs',
+    #                 figure={
+    #                     'data': [{
+    #                         'x': [1, 2, 3],
+    #                         'y': [5, 10, 6],
+    #                         'type': 'bar'
+    #                     }]
+    #                 }
+    #             )
+    #         ])
 
 
     @app.callback(
-        dash.dependencies.Output('relayout-data', 'children'),
-        [dash.dependencies.Input('activity-graph', 'relayoutData'),
-         dash.dependencies.Input('signal-strength-graph', 'relayoutData'),
-         dash.dependencies.Input('spectrogram-activity-graph', 'relayoutData'),
-         dash.dependencies.Input('farm-dropdown', 'value')])
+        Output('relayout-data', 'children'),
+        [Input('activity-graph', 'relayoutData'),
+         Input('signal-strength-graph', 'relayoutData'),
+         Input('spectrogram-activity-graph', 'relayoutData'),
+         Input('farm-dropdown', 'value')])
     def display_selected_data(v1, v2, v3, v4):
         if v1 is not None:
             if "autosize" not in v1 and "xaxis.autorange" not in v1:
@@ -1150,11 +1081,12 @@ if __name__ == '__main__':
         return json.dumps({'autosize': True}, indent=2)
 
 
-    @app.callback(dash.dependencies.Output('log-div', 'children'),
-                  [dash.dependencies.Input('figure-data', 'children'),
-                   dash.dependencies.Input('serial-number-dropdown', 'options'),
-                   dash.dependencies.Input('farm-dropdown', 'value')])
+    @app.callback(Output('log-div', 'children'),
+                  [Input('figure-data', 'children'),
+                   Input('serial-number-dropdown', 'options'),
+                   Input('farm-dropdown', 'value')])
     def clean_data(data, serial, farm):
+
         print("printing log...")
         print(farm)
         j = json.dumps(serial)
@@ -1181,13 +1113,14 @@ if __name__ == '__main__':
 
         if not d and farm is not None:
             return html.Div([
+                html.Br(),
                 html.P("Individual in the farm: %d" % len(serial)),
                 html.P("Individual with famacha data available: %s" % individual_with_famacha_data)
             ])
 
 
-    @app.callback(dash.dependencies.Output('intermediate-value', 'children'),
-                  [dash.dependencies.Input('farm-dropdown', 'value')])
+    @app.callback(Output('intermediate-value', 'children'),
+                  [Input('farm-dropdown', 'value')])
     def clean_data(farm_id):
         if farm_id is not None:
             print("saving data in hidden div...")
@@ -1246,8 +1179,8 @@ if __name__ == '__main__':
 
 
     @app.callback(
-        dash.dependencies.Output('serial-number-dropdown', 'options'),
-        [dash.dependencies.Input('intermediate-value', 'children')])
+        Output('serial-number-dropdown', 'options'),
+        [Input('intermediate-value', 'children')])
     def update_serial_number_drop_down(intermediate_value):
         if intermediate_value:
             l = json.loads(intermediate_value)
@@ -1266,51 +1199,50 @@ if __name__ == '__main__':
             return [{}]
 
 
-    @app.callback(
-        dash.dependencies.Output('farm-title', 'children'),
-        [dash.dependencies.Input('farm-dropdown', 'value')])
-    def update_title(file_path):
-        if file_path is not None:
-            return "Data file: %s" % sys.argv[1] + "\\" + file_path
+    # @app.callback(
+    #     Output('farm-title', 'children'),
+    #     [Input('farm-dropdown', 'value')])
+    # def update_title(file_path):
+    #     if file_path is not None:
+    #         return "Data file: %s" % sys.argv[1] + "\\" + file_path
 
 
     @app.callback(
-        dash.dependencies.Output('figure-data', 'children'),
-        [dash.dependencies.Input('serial-number-dropdown', 'value'),
-         dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children'),
-         dash.dependencies.Input('relayout-data', 'children')])
-    def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
-        global sql_db
-        p = Process(target=thread_activity,
-                    args=(q_1, selected_serial_number, value, intermediate_value, relayout_data,))
-        p.start()
-        result = q_1.get()
-        p.join()
-        if len(result) > 0:
-            return json.dumps(result, cls=plotly.utils.PlotlyJSONEncoder)
-
+        Output('figure-data', 'children'),
+        [Input('serial-number-dropdown', 'value'),
+         Input('intermediate-value', 'children'),
+         Input('cubic-interpolation', 'values'),
+         Input('relayout-data', 'children')])
+    def update_figure(selected_serial_number, intermediate_value, cubic_interp, relayout_data):
+        if intermediate_value is not None:
+            global sql_db
+            p = Process(target=thread_activity,
+                        args=(q_1, selected_serial_number, intermediate_value, relayout_data, cubic_interp,))
+            p.start()
+            result = q_1.get(timeout=10)
+            p.join()
+            if len(result) > 0:
+                return json.dumps(result, cls=plotly.utils.PlotlyJSONEncoder)
 
     @app.callback(
-        dash.dependencies.Output('figure-data-herd', 'children'),
-        [dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children'),
-         dash.dependencies.Input('relayout-data', 'children')])
-    def update_figure(value, intermediate_value, relayout_data):
+        Output('figure-data-herd', 'children'),
+        [Input('intermediate-value', 'children'),
+         Input('cubic-interpolation', 'values'),
+         Input('relayout-data', 'children')])
+    def update_figure(intermediate_value, cubic_interp, relayout_data):
         global sql_db
         p = Process(target=thread_activity_herd,
-                    args=(q_4, value, intermediate_value, relayout_data,))
+                    args=(q_4, intermediate_value, cubic_interp, relayout_data,))
         p.start()
-        result = q_4.get()
+        result = q_4.get(timeout=10)
         p.join()
         if len(result) > 0:
             return json.dumps(result, cls=plotly.utils.PlotlyJSONEncoder)
 
-
     @app.callback(
-        dash.dependencies.Output('activity-graph', 'figure'),
-        [dash.dependencies.Input('intermediate-value', 'children'),
-         dash.dependencies.Input('figure-data', 'children')])
+        Output('activity-graph', 'figure'),
+        [Input('intermediate-value', 'children'),
+         Input('figure-data', 'children')])
     def update_figure(data_f, data):
         _d = []
         if data is not None:
@@ -1318,9 +1250,7 @@ if __name__ == '__main__':
         _d_f = []
         if data_f is not None:
             _d_f = json.loads(data_f)
-
-        figures = build_activity_graph(_d, _d_f)
-
+        figures, layout = build_activity_graph(_d, _d_f)
         result = {
             'data': [],
             'layout': go.Layout(xaxis={'autorange': True},
@@ -1328,7 +1258,6 @@ if __name__ == '__main__':
                                 autosize=True,
                                 legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
         }
-
         for f in figures:
             result = {
                 'data': f[10]['data'],
@@ -1336,10 +1265,9 @@ if __name__ == '__main__':
             }
         return result
 
-
     @app.callback(
-        dash.dependencies.Output('activity-graph-herd', 'figure'),
-         [dash.dependencies.Input('figure-data-herd', 'children')])
+        Output('activity-graph-herd', 'figure'),
+        [Input('figure-data-herd', 'children')])
     def update_figure(data):
         result = {
             'data': [],
@@ -1361,47 +1289,103 @@ if __name__ == '__main__':
 
 
     @app.callback(
-        dash.dependencies.Output('spectrogram-activity-graph', 'figure'),
-        [dash.dependencies.Input('figure-data', 'children'),
-         dash.dependencies.Input('window-size-input', 'value'),
-         dash.dependencies.Input('transform-radio', 'value')])
-    def update_figure(data, window_size, radio):
-        j = []
-        if data is not None:
-            j = json.loads(data)
-        result = {
-            'data': [],
-            'layout': go.Layout(xaxis={'autorange': True},
-                                yaxis={'autorange': True, 'title': 'Frequency'},
-                                autosize=True,
-                                legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
-        }
-        for f in j:
-            activity = f["activity"]
-            time = f["time"]
-            relayout = f["relayout_data"]
-            p = Process(target=thread_spectrogram, args=(q_3, activity, time, window_size, radio, relayout,))
-            p.start()
-            result = q_3.get()[3]
-            p.join()
+        Output('spectrogram-activity-graph', 'style'),
+        [Input('spectrogram-activity-graph', 'figure')])
+    def hide_graph(spectrogram_activity_graph):
+        if len(spectrogram_activity_graph['data']) == 0:
+            return {'display': 'none'}
 
-        return result
-
+    # @app.callback(
+    #     Output('spectrogram-activity-graph', 'figure'),
+    #     [Input('figure-data', 'children'),
+    #      Input('window-size-input', 'value'),
+    #      Input('transform-radio', 'value')])
+    # def update_figure(data, window_size, radio):
+    #     j = []
+    #     if data is not None:
+    #         j = json.loads(data)
+    #     result = {
+    #         'data': [],
+    #         'layout': go.Layout(xaxis={'autorange': True},
+    #                             yaxis={'autorange': True, 'title': 'Frequency'},
+    #                             autosize=True,
+    #                             legend=dict(y=0.98), margin=go.layout.Margin(l=60, r=50, t=5, b=40))
+    #     }
+    #     for f in j:
+    #         activity = f["activity"]
+    #         time = f["time"]
+    #         relayout = f["relayout_data"]
+    #         p = Process(target=thread_spectrogram, args=(q_3, activity, time, window_size, radio, relayout,))
+    #         p.start()
+    #         result = q_3.get()[3]
+    #         p.join()
+    #
+    #     return result
 
     @app.callback(
-        dash.dependencies.Output('signal-strength-graph', 'figure'),
-        [dash.dependencies.Input('serial-number-dropdown', 'value'),
-         dash.dependencies.Input('resolution-slider', 'value'),
-         dash.dependencies.Input('intermediate-value', 'children'),
-         dash.dependencies.Input('relayout-data', 'children')])
-    def update_figure(selected_serial_number, value, intermediate_value, relayout_data):
-        p = Process(target=thread_signal, args=(q_2, selected_serial_number, value, intermediate_value, relayout_data,))
+        Output('signal-strength-graph', 'figure'),
+        [Input('serial-number-dropdown', 'value'),
+         Input('intermediate-value', 'children'),
+         Input('relayout-data', 'children')])
+    def update_figure(selected_serial_number, intermediate_value, relayout_data):
+        p = Process(target=thread_signal, args=(q_2, selected_serial_number, intermediate_value, relayout_data,))
         p.start()
-        result = q_2.get()
+        result = q_2.get(timeout=10)
         p.join()
         return result
 
+    @app.callback(
+        Output('signal-strength-graph', 'style'),
+        [Input('signal-strength-graph', 'figure')])
+    def hide_graph(signal_strength_graph):
+        if len(signal_strength_graph['data']) == 0:
+            return {'display': 'none', 'height': '20vh'}
+        else:
+            return {'height': '20vh'}
 
-    app.css.append_css({"external_url": "https://codepen.io/chriddyp/pen/brPBPO.css"})
-    print('init dash...')
+
+    @app.callback(
+        Output('activity-graph-herd', 'style'),
+        [Input('activity-graph-herd', 'figure')])
+    def hide_graph(activity_graph_herd):
+        if len(activity_graph_herd['data']) == 0:
+            return {'display': 'none', 'height': '80vh'}
+        else:
+            return {'height': '80vh'}
+
+
+    @app.callback(
+        Output('activity-graph', 'style'),
+        [Input('activity-graph', 'figure')])
+    def hide_graph(activity_graph):
+        if len(activity_graph['data']) == 0:
+            return {'display': 'none', 'height': '23vh'}
+        else:
+            return {'height': '23vh'}
+
+
+    @app.callback(
+        Output('no-farm-label-1', 'style'),
+        [Input('farm-dropdown', 'value')])
+    def hide_graph(value):
+        if value is not None:
+            return {'display': 'none', 'height': '0%'}
+
+
+    @app.callback(
+        Output('no-farm-label-2', 'style'),
+        [Input('farm-dropdown', 'value')])
+    def hide_graph(value):
+        if value is not None:
+            return {'display': 'none', 'height': '0%'}
+
+    # @app.callback(
+    #     Output('dashboard', 'style'),
+    #     [Input('dashboard', 'children')])
+    # def hide_graph(value):
+    #     return {'width': '100%', 'min-height': '20.4vh', 'background-color': 'gray', 'padding': '0vh'}
+
     app.run_server(debug=True, use_reloader=False)
+
+
+
