@@ -832,12 +832,12 @@ def build_dashboard_layout():
                 ],
                     style={'max-height': '10px', 'min-height': '10px', 'max-width': '400px', 'min-width': '400px', 'margin-bottom': '0px'}
                 )
-            ], className='two columns'),
+            ], style={'display': 'inline-block'}),
 
             html.Div([
                 # html.Label('logs:'),
-                html.Div(id='log-div', style={'max-width': '500px', 'min-width': '500px', 'color': 'white', 'background-color': 'red'}),
-            ], style={'margin-left': '35px', 'margin-top': '0vh', 'width': '50vh'}, className='two columns')
+                html.Div(id='log-div', style={'color': 'white'}),
+            ], style={'margin-left': '50px', 'margin-top': '10px', 'height': '180px', 'width': '500px', 'display': 'inline-block'})
         ], id='dashboard',
             style={'position': 'relative', 'width': '100%', 'height': '200px', 'min-height': '200px',
                    'max-height': '200px', 'background-color': 'gray', 'padding-left': '25px',  'padding-bottom': '10px', 'padding-top': '5px', 'margin': '0vh'}),
