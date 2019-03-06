@@ -187,7 +187,7 @@ def interpolate(input_activity):
     try:
         i = np.array(input_activity, dtype=np.float)
         s = pd.Series(i)
-        s = s.interpolate(method='cubic')
+        s = s.interpolate(method='cubic', limit_direction='both')
         return s.tolist()
     except ValueError as e:
         return input_activity
@@ -450,7 +450,7 @@ def thread_activity(q_1, selected_serial_number, intermediate_value, relayout_da
             print(activity)
             print(time)
 
-            activity, time = scale_dataset_to_screen_size(activity, time, 960)
+            activity, time = scale_dataset_to_screen_size(activity, time, 1000)
 
             if len(activity) and len([x for x in activity if x is not None]) > 0:
                 traces = []
@@ -629,17 +629,19 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
     # print(activity, time, window_size, radio, relayout)
     x_max = range_d['x_max']
     traces = []
-    # print("activity in spec", activity)
+    print("activity in spec", activity)
     if len(activity) > 1 and None not in activity:
         if activity is not None and window_size is not None:
             if int(window_size) > len(activity):
                 window_size = int(len(activity))
-
+        print("before processing")
         w = signal.blackman(int(window_size))
         f, t, Sxx = signal.spectrogram(np.asarray(activity), window=w)
-
+        print("after processing")
         widths = np.arange(1, 31)
         cwtmatr = signal.cwt(np.asarray(activity), signal.ricker, widths)
+        print("after processing")
+        transform = "CWT"
         if radio == "STFT":
             transform = Sxx
         if radio == "CWT":
@@ -650,7 +652,7 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
             z=transform,
             colorscale='Viridis',
         ))
-
+    print("appended")
     if x_max is not None:
         q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
             'data': traces,
@@ -670,7 +672,8 @@ def thread_spectrogram(q_3, activity, time, window_size, radio, relayout):
             showlegend=True, legend=dict(y=0.98),
             margin=go.layout.Margin(l=60, r=50, t=5, b=40))
 
-        q_3.put([{'thread_activity': True}, {'activity': activity}, {'time': time}, {
+        print("thread_spectrogram finishing")
+        q_3.put([{'thread_spectrogram': True}, {'activity': activity}, {'time': time}, {
             'data': traces,
             'layout': layout_activity
         }])
@@ -687,6 +690,7 @@ def connect_to_sql_database(db_server_name="localhost", db_user="axel", db_passw
 
 
 def execute_sql_query(query, records=None, log_enabled=False):
+    print(query)
     try:
         sql_db = connect_to_sql_database()
         cursor = sql_db.cursor()
@@ -839,7 +843,7 @@ def build_dashboard_layout():
                 html.Div(id='log-div', style={'color': 'white'}),
             ], style={'margin-left': '50px', 'margin-top': '10px', 'height': '180px', 'width': '500px', 'display': 'inline-block'})
         ], id='dashboard',
-            style={'position': 'relative', 'width': '100%', 'height': '200px', 'min-height': '200px',
+            style={'position': 'relative', 'width': '45%', 'height': '200px', 'min-height': '200px',
                    'max-height': '200px', 'background-color': 'gray', 'padding-left': '25px',  'padding-bottom': '10px', 'padding-top': '5px', 'margin': '0vh'}),
 
         html.Div([
@@ -848,15 +852,15 @@ def build_dashboard_layout():
                 children="No farm selected.")
         ], style={'width': '100%', 'text-align': 'center', 'margin-top': '5vh'})
 
-    ])
+    ], style={'max-height': '350px', 'min-height': '350px', 'background-color': 'white', 'margin-bottom': '0px'})
 
 
-def get_side_by_side_div(div_l, div_r):
+def get_side_by_side_div(div_l, div_r, offset):
     return html.Div([
-        html.Div([div_l], style={'height': '200px', 'width': '800px', 'float': 'left'}),
-        html.Div([div_r], style={'height': '200px', 'width': '800px', 'float': 'right'})
+        html.Div([div_l], style={'height': '150px', 'width': '950px', 'float': 'left'}),
+        html.Div([div_r], style={'height': str(150+offset)+'px', 'width': '900px', 'float': 'right', 'margin-right': '50px'})
     ],
-        style={'height': '400px', 'width': '1920px'})
+        style={'height': str(400+offset)+'px', 'width': '1920px', 'margin-bottom': '0px'})
 
 
 def build_graphs_layout():
@@ -892,9 +896,9 @@ def build_graphs_layout():
                         margin=go.layout.Margin(l=0, r=0, t=0, b=0)
                     )
                 ),
-                style={'padding-top': '0vh'},
+                style={'margin-top': '-100px', 'height': '600px'},
                 id='activity-graph-herd'
-            ))
+            ), 100)
         ,
 
         get_side_by_side_div(
@@ -908,7 +912,7 @@ def build_graphs_layout():
                         )
                     ],
                     layout=go.Layout(
-                        margin=go.layout.Margin(l=40, r=50, t=5, b=35)
+                        margin=go.layout.Margin(l=40, r=50, t=50, b=35)
 
                     )
                 ),
@@ -926,15 +930,15 @@ def build_graphs_layout():
                         )
                     ],
                     layout=go.Layout(
-                        margin=go.layout.Margin(l=40, r=50, t=5, b=0)
+                        margin=go.layout.Margin(l=40, r=50, t=50, b=0)
                     )
                 ),
                 style={'height': '20vh'},
                 id='signal-strength-graph'
             )
-        )
+        , 0)
 
-    ])
+    ], style={'background-color': 'white', 'margin-top':'0px'})
 
 
 def build_default_app_layout(app):
@@ -1182,7 +1186,7 @@ if __name__ == '__main__':
             p = Process(target=thread_activity,
                         args=(q_1, selected_serial_number, intermediate_value, relayout_data, cubic_interp,))
             p.start()
-            result = q_1.get(timeout=20)
+            result = q_1.get()
             p.join()
             if len(result) > 0:
                 return json.dumps(result, cls=plotly.utils.PlotlyJSONEncoder)
@@ -1198,7 +1202,7 @@ if __name__ == '__main__':
         p = Process(target=thread_activity_herd,
                     args=(q_4, intermediate_value, cubic_interp, relayout_data,))
         p.start()
-        result = q_4.get(timeout=20)
+        result = q_4.get()
         p.join()
         if len(result) > 0:
             return json.dumps(result, cls=plotly.utils.PlotlyJSONEncoder)
@@ -1231,20 +1235,25 @@ if __name__ == '__main__':
         Output('activity-graph-herd', 'figure'),
         [Input('figure-data-herd', 'children')])
     def update_figure(data):
-        result = {
-            'data': [],
-            'layout': go.Layout(xaxis=dict(ticks=''),
-                                yaxis=dict(ticks='', nticks=3))
-        }
+        # result = {
+        #     'data': [],
+        #     'layout': go.Layout(xaxis=dict(ticks=''),
+        #                         yaxis=dict(ticks='', nticks=3))
+        # }
 
+        result = {}
         if data is not None:
             j = json.loads(data)
-            range_d = j[0]["range_d"]
+            # range_d = j[0]["range_d"]
             # ticks = len(j[0]['traces'][0]['y'])
+            print(j)
+            s = j[0]['relayout_data']
+            print(s)
+            layout = json.loads(s)
+            print(layout)
             result = {
                 'data': j[0]['traces'],
-                'layout': go.Layout(xaxis=dict(ticks=''),
-                                    yaxis=dict(ticks=''))
+                'layout': layout
             }
         print('result', result)
         return result
@@ -1281,7 +1290,7 @@ if __name__ == '__main__':
             relayout = f["relayout_data"]
             p = Process(target=thread_spectrogram, args=(q_3, activity, time, window_size, radio, relayout,))
             p.start()
-            result = q_3.get(timeout=20)[3]
+            result = q_3.get()[3]
             p.join()
 
         return result
@@ -1295,7 +1304,7 @@ if __name__ == '__main__':
     def update_figure(selected_serial_number, intermediate_value, relayout_data):
         p = Process(target=thread_signal, args=(q_2, selected_serial_number, intermediate_value, relayout_data,))
         p.start()
-        result = q_2.get(timeout=20)
+        result = q_2.get()
         p.join()
         return result
 
