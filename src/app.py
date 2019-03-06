@@ -4,27 +4,26 @@ import json
 import operator
 import sys
 from datetime import datetime, timedelta
+from itertools import groupby
 from multiprocessing import Process, Queue
-from threading import Timer
 from time import mktime
 from time import strptime
 
 import dash
 import dash_core_components as dcc
 import dash_html_components as html
-from dash.dependencies import Input, Output, State
+import flask
 import numpy as np
+import pandas as pd
 import plotly
 import plotly.graph_objs as go
-import pandas as pd
 import pymysql
 import requests
 import tables
-from scipy import signal
+from dash.dependencies import Input, Output
 from dateutil.relativedelta import *
 from ipython_genutils.py3compat import xrange
-import flask
-from itertools import groupby
+from scipy import signal
 
 global sql_db
 
@@ -87,6 +86,7 @@ def get_elapsed_time_seconds(time_initial, time_next):
 
 
 def find_appropriate_resolution(duration):
+    value = None
     if 0 < duration <= 3 * 3600.0:
         value = 5
     if 3 * 3600.0 < duration <= 4 * 3600.0:
@@ -197,7 +197,7 @@ def build_activity_graph(data, data_f, dragmode):
     layout = None
     figures = []
     for d in data:
-        x_max = d["x_max"]
+        # x_max = d["x_max"]
         signal_size = d["signal_size"]
         min_activity_value = d["min_activity_value"]
         max_activity_value = d["max_activity_value"]
@@ -221,7 +221,7 @@ def build_activity_graph(data, data_f, dragmode):
 
         print('dragmode', dragmode)
         enable_dragmode = None
-        if "dragmode" in dragmode:
+        if dragmode is not None and "dragmode" in dragmode:
             enable_dragmode = "pan"
 
         print("x axis data is", x_axis_data)
@@ -450,7 +450,7 @@ def thread_activity(q_1, selected_serial_number, intermediate_value, relayout_da
             print(activity)
             print(time)
 
-            activity, time = scale_dataset_to_screen_size(activity, time, 100)
+            activity, time = scale_dataset_to_screen_size(activity, time, 960)
 
             if len(activity) and len([x for x in activity if x is not None]) > 0:
                 traces = []
@@ -745,178 +745,195 @@ def scale_dataset_to_screen_size(activity_list, timestamp_list, width):
 
 def build_dashboard_layout():
     return html.Div([
-    html.Div([html.Pre(id='relayout-data-last-config', style={'display': 'none'})]),
-    html.Div(id='output'),
-    # Hidden div inside the app that stores the intermediate value
-    html.Div(id='intermediate-value', style={'display': 'none'}),
-    html.Div(id='figure-data', style={'display': 'none'}),
-    html.Div(id='figure-data-herd', style={'display': 'none'}),
-    html.Img(id='logo', style={'max-width': '10%', 'min-width': '10%'},
-             src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol'
-                 '-logo.png?itok=V80d7RFe'),
-    html.Br(),
-    html.Big(
-        children="PhD Thesis: Deep learning of activity monitoring data for disease detection to support "
-                 "livestock farming in resource-poor communities in Africa."),
-    html.Br(),
-    html.Br(),
-    # html.B(id='farm-title'),
-    html.Div([html.Pre(id='relayout-data', style={'display': 'none'})]),
+        html.Div([html.Pre(id='relayout-data-last-config', style={'display': 'none'})]),
+        html.Div(id='output'),
+        # Hidden div inside the app that stores the intermediate value
+        html.Div(id='intermediate-value', style={'display': 'none'}),
+        html.Div(id='figure-data', style={'display': 'none'}),
+        html.Div(id='figure-data-herd', style={'display': 'none'}),
+        html.Img(id='logo', style={'max-width': '10%', 'min-width': '10%'},
+                 src='http://dof4zo1o53v4w.cloudfront.net/s3fs-public/styles/logo/public/logos/university-of-bristol'
+                     '-logo.png?itok=V80d7RFe'),
+        html.Br(),
+        html.Big(
+            children="PhD Thesis: Deep learning of activity monitoring data for disease detection to support "
+                     "livestock farming in resource-poor communities in Africa."),
+        html.Br(),
+        html.Br(),
+        # html.B(id='farm-title'),
+        html.Div([html.Pre(id='relayout-data', style={'display': 'none'})]),
 
-    html.Div([
         html.Div([
-            html.Label('Farm selection:', style={'color': 'white', 'font-weight': 'bold'}),
-            dcc.Dropdown(
-                id='farm-dropdown',
-                options=farm_array,
-                placeholder="Select farm...",
-                style={'width': '350px', 'margin-bottom': '10px'}
-                # value=40121100718
-            ),
-            html.Label('Animal selection:', style={'color': 'white', 'font-weight': 'bold'}),
-            dcc.Dropdown(
-                id='serial-number-dropdown',
-                options=[],
-                multi=False,
-                placeholder="Select animal...",
-                style={'width': '350px', 'margin-bottom': '20px'}
-                # value=40121100718
-            ),
+            html.Div([
+                html.Label('Farm selection:', style={'color': 'white', 'font-weight': 'bold'}),
+                dcc.Dropdown(
+                    id='farm-dropdown',
+                    options=farm_array,
+                    placeholder="Select farm...",
+                    style={'width': '350px', 'margin-bottom': '10px'}
+                    # value=40121100718
+                ),
+                html.Label('Animal selection:', style={'color': 'white', 'font-weight': 'bold'}),
+                dcc.Dropdown(
+                    id='serial-number-dropdown',
+                    options=[],
+                    multi=False,
+                    placeholder="Select animal...",
+                    style={'width': '350px', 'margin-bottom': '20px'}
+                    # value=40121100718
+                ),
+
+                html.Div([
+                    html.Div([
+                        html.Label('Transform:', style={'min-width': '100px', 'color': 'white', 'font-weight': 'bold'}),
+                        dcc.RadioItems(
+                            id='transform-radio',
+                            options=[
+                                {'label': 'STFT', 'value': 'STFT'},
+                                {'label': 'CWT', 'value': 'CWT'}
+                            ],
+                            labelStyle={'display': 'inline-block', 'color': 'white'},
+                            value='CWT')],
+                        style={'margin-bottom': '30px', 'margin-left': '0px', 'min-width': '120px', 'display': 'inline-block'}
+                    ),
+                    html.Div([
+                        html.Label('Window size:', style={'min-width': '100px', 'margin-left': '0vh', 'color': 'white',
+                                                          'font-weight': 'bold'}),
+                        dcc.Input(
+                            id='window-size-input',
+                            placeholder='Input size of window here...',
+                            type='text',
+                            value='40',
+                            style={'min-width': '50px', 'max-width': '50px', 'height': '20px', 'margin-left': '0vh'}
+                        )],
+                        style={'margin-bottom': '30px', 'margin-left': '10px', 'min-width': '120px',
+                               'display': 'inline-block'}
+                    ),
+
+                    html.Div([
+                        html.Label('Interpolation:',
+                                   style={'min-width': '100px', 'margin-left': '0vh', 'color': 'white',
+                                          'font-weight': 'bold'}),
+                        dcc.Checklist(
+                            id='cubic-interpolation',
+                            options=[
+                                {'label': 'Cubic', 'value': 'cubic'}
+                            ],
+                            values=[],
+                            style={'margin-top': '-50px', 'height': '20px', 'min-width': '100px', 'margin-left': '0px',
+                                   'color': 'white',
+                                   'font-weight': 'bold', 'display': 'inline-block'}
+                        )
+                    ],
+                        style={'margin-bottom': '30px', 'margin-left': '0px', 'min-width': '120px',
+                               'display': 'inline-block'}
+                    ),
+
+                ],
+                    style={'max-height': '10px', 'min-height': '10px', 'max-width': '400px', 'min-width': '400px', 'margin-bottom': '0px'}
+                )
+            ], className='two columns'),
 
             html.Div([
-                html.Div([
-                    html.Label('Transform:', style={'color': 'white', 'font-weight': 'bold'}),
-                    dcc.RadioItems(
-                        id='transform-radio',
-                        options=[
-                            {'label': 'STFT', 'value': 'STFT'},
-                            {'label': 'CWT', 'value': 'CWT'}
-                        ],
-                        labelStyle={'display': 'inline-block', 'color': 'white'},
-                        value='CWT')],
-                    className='three columns',
-                    style={'margin-bottom': '30px', 'margin-left': '0px', 'width': '120px'}
-                ),
-                html.Div([
-                    html.Label('Window size:', style={'width': '100px', 'margin-left': '0vh', 'color': 'white',
-                                                      'font-weight': 'bold'}),
-                    dcc.Input(
-                        id='window-size-input',
-                        placeholder='Input size of window here...',
-                        type='text',
-                        value='40',
-                        style={'width': '50px', 'height': '20px', 'margin-left': '0vh'}
-                    )],
-                    className='three columns'
-
-                ),
-
-                html.Div([
-                    dcc.Checklist(
-                        id='cubic-interpolation',
-                        options=[
-                            {'label': 'Cubic interpolation', 'value': 'cubic'}
-                        ],
-                        values=[],
-                        style={'height': '20px', 'width': '100px', 'margin-left': '60px', 'color': 'white',
-                               'font-weight': 'bold'}
-                    )
-                ],
-                    className='three columns',
-                    style={'width': '20px'}
-                ),
-
-            ],
-                style={'margin-bottom': '80px'}
-            )
-        ], className='two columns', style={'margin-left': '1vh'}),
+                # html.Label('logs:'),
+                html.Div(id='log-div', style={'max-width': '500px', 'min-width': '500px', 'color': 'white', 'background-color': 'red'}),
+            ], style={'margin-left': '35px', 'margin-top': '0vh', 'width': '50vh'}, className='two columns')
+        ], id='dashboard',
+            style={'position': 'relative', 'width': '100%', 'height': '200px', 'min-height': '200px',
+                   'max-height': '200px', 'background-color': 'gray', 'padding-left': '25px',  'padding-bottom': '10px', 'padding-top': '5px', 'margin': '0vh'}),
 
         html.Div([
-            # html.Label('logs:'),
-            html.Div(id='log-div', style={'color': 'white'}),
-        ], style={'margin-left': '35vh', 'margin-top': '0vh', 'width': '50vh'}, className='two columns')
-    ], id='dashboard',
-        style={'position': 'relative', 'width': '100%', 'height': '200px', 'min-height': '200px',
-               'max-height': '200px', 'background-color': 'gray', 'padding-bottom': '10px', 'padding-top': '5px', 'margin': '0vh'}),
-
-    html.Div([
-        html.Big(
-            id="no-farm-label",
-            children="No farm selected.")
-    ], style={'width': '100%', 'text-align': 'center', 'margin-top': '5vh'})
+            html.Big(
+                id="no-farm-label",
+                children="No farm selected.")
+        ], style={'width': '100%', 'text-align': 'center', 'margin-top': '5vh'})
 
     ])
 
 
+def get_side_by_side_div(div_l, div_r):
+    return html.Div([
+        html.Div([div_l], style={'height': '200px', 'width': '800px', 'float': 'left'}),
+        html.Div([div_r], style={'height': '200px', 'width': '800px', 'float': 'right'})
+    ],
+        style={'height': '400px', 'width': '1920px'})
+
+
 def build_graphs_layout():
     return html.Div([
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Scatter(
-                        x=[],
-                        y=[],
-                        name='',
-                    )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=10, b=35)
-                )
-            ),
-            style={'height': '23vh', 'padding-top': '1vh'},
-            id='activity-graph'
-        ),
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Heatmap(
-                        x=[],
-                        y=[],
-                        name='',
-                    )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=5, b=35)
 
-                )
-            ),
-            style={'height': '20vh'},
-            id='spectrogram-activity-graph'
-        ),
-
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Scatter(
-                        x=[],
-                        y=[],
-                        name='',
+        get_side_by_side_div(
+            dcc.Graph(
+                figure=go.Figure(
+                    data=[
+                        go.Scatter(
+                            x=[],
+                            y=[],
+                            name='',
+                        )
+                    ],
+                    layout=go.Layout(
+                        margin=go.layout.Margin(l=0, r=0, t=0, b=0)
                     )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=10, b=35)
-                )
+                ),
+                style={'padding-top': '0vh'},
+                id='activity-graph'
             ),
-            style={'height': '100vh', 'padding-top': '1vh'},
-            id='activity-graph-herd'
-        ),
-
-        dcc.Graph(
-            figure=go.Figure(
-                data=[
-                    go.Scatter(
-                        x=[],
-                        y=[],
-                        name='',
+            dcc.Graph(
+                figure=go.Figure(
+                    data=[
+                        go.Scatter(
+                            x=[],
+                            y=[],
+                            name='',
+                        )
+                    ],
+                    layout=go.Layout(
+                        margin=go.layout.Margin(l=0, r=0, t=0, b=0)
                     )
-                ],
-                layout=go.Layout(
-                    margin=go.layout.Margin(l=40, r=50, t=5, b=0)
-                )
+                ),
+                style={'padding-top': '0vh'},
+                id='activity-graph-herd'
+            ))
+        ,
+
+        get_side_by_side_div(
+            dcc.Graph(
+                figure=go.Figure(
+                    data=[
+                        go.Heatmap(
+                            x=[],
+                            y=[],
+                            name='',
+                        )
+                    ],
+                    layout=go.Layout(
+                        margin=go.layout.Margin(l=40, r=50, t=5, b=35)
+
+                    )
+                ),
+                style={'height': '20vh'},
+                id='spectrogram-activity-graph'
             ),
-            style={'height': '20vh'},
-            id='signal-strength-graph'
+
+            dcc.Graph(
+                figure=go.Figure(
+                    data=[
+                        go.Scatter(
+                            x=[],
+                            y=[],
+                            name='',
+                        )
+                    ],
+                    layout=go.Layout(
+                        margin=go.layout.Margin(l=40, r=50, t=5, b=0)
+                    )
+                ),
+                style={'height': '20vh'},
+                id='signal-strength-graph'
+            )
         )
+
     ])
 
 
@@ -924,7 +941,7 @@ def build_default_app_layout(app):
     app.layout = html.Div(
         [
             build_dashboard_layout(), build_graphs_layout()
-        ], id='main-div')
+        ], id='main-div', style={'max-width': '1920px', 'min-width': '1920px'})
 
 
 def check_dragmode(layout_dict_list):
@@ -994,7 +1011,8 @@ if __name__ == '__main__':
             d = json.loads(v1)
             if 'dragmode' in d and d['dragmode'] == 'pan':
                 print('do not update field!')
-                raise Exception("hack for skipping text field update...")
+                # raise Exception("hack for skipping text field update...")
+                raise dash.exceptions.PreventUpdate()
             else:
                 return json.dumps(v1, indent=2)
 
@@ -1152,14 +1170,6 @@ if __name__ == '__main__':
         else:
             return [{}]
 
-
-    # @app.callback(
-    #     Output('farm-title', 'children'),
-    #     [Input('farm-dropdown', 'value')])
-    # def update_title(file_path):
-    #     if file_path is not None:
-    #         return "Data file: %s" % sys.argv[1] + "\\" + file_path
-
     @app.callback(
         Output('figure-data', 'children'),
         [Input('serial-number-dropdown', 'value'),
@@ -1290,44 +1300,44 @@ if __name__ == '__main__':
         return result
 
 
-    @app.callback(
-        Output('signal-strength-graph', 'style'),
-        [Input('signal-strength-graph', 'figure')])
-    def hide_graph(signal_strength_graph):
-        if len(signal_strength_graph['data']) == 0:
-            return {'display': 'none', 'height': '20vh'}
-        else:
-            return {'height': '20vh'}
+    # @app.callback(
+    #     Output('signal-strength-graph', 'style'),
+    #     [Input('signal-strength-graph', 'figure')])
+    # def hide_graph(signal_strength_graph):
+    #     if len(signal_strength_graph['data']) == 0:
+    #         return {'display': 'none', 'height': '20vh'}
+    #     else:
+    #         return {'height': '20vh'}
 
 
-    @app.callback(
-        Output('activity-graph-herd', 'style'),
-        [Input('activity-graph-herd', 'figure')])
-    def hide_graph(activity_graph_herd):
-        if len(activity_graph_herd['data']) == 0:
-            return {'display': 'none', 'height': '80vh'}
-        else:
-            return {'height': '80vh'}
+    # @app.callback(
+    #     Output('activity-graph-herd', 'style'),
+    #     [Input('activity-graph-herd', 'figure')])
+    # def hide_graph(activity_graph_herd):
+    #     if len(activity_graph_herd['data']) == 0:
+    #         return {'display': 'none', 'height': '80vh'}
+    #     else:
+    #         return {'height': '80vh'}
 
 
-    @app.callback(
-        Output('activity-graph', 'style'),
-        [Input('activity-graph', 'figure')])
-    def hide_graph(activity_graph):
-        if 'data' not in activity_graph or len(activity_graph['data']) == 0:
-            return {'display': 'none', 'height': '23vh'}
-        else:
-            return {'height': '23vh'}
+    # @app.callback(
+    #     Output('activity-graph', 'style'),
+    #     [Input('activity-graph', 'figure')])
+    # def hide_graph(activity_graph):
+    #     if 'data' not in activity_graph or len(activity_graph['data']) == 0:
+    #         return {'display': 'none', 'height': '23vh'}
+    #     else:
+    #         return {'height': '23vh'}
 
 
-    @app.callback(
-        Output('spectrogram-activity-graph', 'style'),
-        [Input('spectrogram-activity-graph', 'figure')])
-    def hide_graph(activity_graph):
-        if len(activity_graph['data']) == 0:
-            return {'display': 'none', 'height': '23vh'}
-        else:
-            return {'height': '23vh'}
+    # @app.callback(
+    #     Output('spectrogram-activity-graph', 'style'),
+    #     [Input('spectrogram-activity-graph', 'figure')])
+    # def hide_graph(activity_graph):
+    #     if len(activity_graph['data']) == 0:
+    #         return {'display': 'none', 'height': '23vh'}
+    #     else:
+    #         return {'height': '23vh'}
 
 
     @app.callback(
